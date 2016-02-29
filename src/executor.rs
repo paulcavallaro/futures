@@ -2,7 +2,11 @@ use std::boxed::{Box, FnBox};
 use std::cell::UnsafeCell;
 use std::collections::vec_deque::VecDeque;
 
+/// An Executor accepts units of work with add(), which must be
+/// threadsafe.
 pub trait Executor {
+    /// Enqueue a function to executed by this executor. This and all
+    /// variants must be threadsafe.
     fn add<F>(&self, work: Box<F>) -> ()
         where F : FnBox();
 }
@@ -32,7 +36,7 @@ fn test_inline_executor() {
     let inline = InlineExecutor::new();
     let cntr = AtomicUsize::new(0);
     inline.add(Box::new(|| {
-        cntr.fetch_add(1, Ordering::Release);
+        cntr.fetch_add(1, Ordering::AcqRel);
     }));
     let val = cntr.load(Ordering::Acquire);
     assert_eq!(val, 1);
