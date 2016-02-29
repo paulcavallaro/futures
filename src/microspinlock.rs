@@ -1,4 +1,6 @@
 use std::sync::atomic::{AtomicBool, ATOMIC_BOOL_INIT, Ordering};
+use std::thread;
+
 use libc::{nanosleep, timespec};
 
 /// Called while spinning (name borrowed from Linux). Can be implemented to call
@@ -59,6 +61,8 @@ pub struct MicroSpinLock {
 const FREE : bool = false;
 const LOCKED : bool = true;
 
+/// A really, *really* small spinlock for fine-grained locking of lots
+/// of teeny-tiny data.
 impl MicroSpinLock {
 
     pub const fn new() -> MicroSpinLock {
@@ -99,21 +103,32 @@ impl MicroSpinLock {
 
 unsafe impl Sync for MicroSpinLock {}
 
+/// Stolen from aturon's [crossbeam](https://github.com/aturon/crossbeam)
+/// Like `std::thread::spawn`, but without the closure bounds.
+pub unsafe fn spawn_unsafe<'a, F>(f: F) -> thread::JoinHandle<()> where F: FnOnce() + 'a {
+    use std::mem;
+    use std::boxed::{FnBox};
+
+    let closure: Box<FnBox() + 'a> = Box::new(f);
+    let closure: Box<FnBox() + Send> = mem::transmute(closure);
+    thread::spawn(move || closure.call_box(()))
+}
 
 #[test]
 fn test_microspinlock_sleep() {
     use std::thread;
     use std::time;
 
-    static TEST_SPINLOCK : MicroSpinLock = MicroSpinLock::new();
-    let spinlock = &TEST_SPINLOCK;
+    let spinlock = MicroSpinLock::new();
     spinlock.lock();
-    let child = thread::spawn(move || {
-        // Sleep 2 seconds then release lock
-        assert!(!spinlock.try_lock());
-        thread::sleep(time::Duration::new(1, 0));
-        spinlock.unlock();
-    });
+    let child = unsafe {
+        spawn_unsafe(|| {
+            // Sleep 2 seconds then release lock
+            assert!(!spinlock.try_lock());
+            thread::sleep(time::Duration::new(1, 0));
+            spinlock.unlock();
+        })
+    };
     spinlock.lock();
     assert!(!spinlock.try_lock());
     spinlock.unlock();
@@ -125,15 +140,16 @@ fn test_microspinlock_spin() {
     use std::thread;
     use std::time;
 
-    static TEST_SPINLOCK : MicroSpinLock = MicroSpinLock::new();
-    let spinlock = &TEST_SPINLOCK;
+    let spinlock = MicroSpinLock::new();
     spinlock.lock();
-    let child = thread::spawn(move || {
-        // Sleep 100 microseconds then release lock
-        assert!(!spinlock.try_lock());
-        thread::sleep(time::Duration::new(0, 100000));
-        spinlock.unlock();
-    });
+    let child = unsafe {
+        spawn_unsafe(|| {
+            // Sleep 100 microseconds then release lock
+            assert!(!spinlock.try_lock());
+            thread::sleep(time::Duration::new(0, 100000));
+            spinlock.unlock();
+        })
+    };
     spinlock.lock();
     assert!(!spinlock.try_lock());
     spinlock.unlock();
