@@ -1,14 +1,18 @@
 use std::boxed::{Box, FnBox};
 use std::cell::UnsafeCell;
 use std::collections::vec_deque::VecDeque;
+use std::mem;
 
 /// An Executor accepts units of work with add(), which must be
 /// threadsafe.
 pub trait Executor {
     /// Enqueue a function to executed by this executor. This and all
     /// variants must be threadsafe.
-    fn add<F>(&self, work: Box<F>) -> ()
-        where F : FnBox();
+    /// We ensure that the work to be done will outlive the Executor
+    /// ensuring that the work will be alive by the time the Executor
+    /// can execute it and consume its lifetime.
+    fn add<'a, 'b>(&'a self, work: Box<FnBox() + Send + 'b>) -> ()
+        where 'b : 'a;
 }
 
 pub struct InlineExecutor;
@@ -23,8 +27,8 @@ impl InlineExecutor {
 }
 
 impl Executor for InlineExecutor {
-    fn add<F>(&self, work: Box<F>) -> ()
-        where F: FnBox() {
+    fn add<'a, 'b>(&'a self, work: Box<FnBox() + Send + 'b>) -> ()
+        where 'b : 'a {
         work.call_box(());
     }
 }
@@ -32,6 +36,7 @@ impl Executor for InlineExecutor {
 #[test]
 fn test_inline_executor() {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::mem;
 
     let inline = InlineExecutor::new();
     let cntr = AtomicUsize::new(0);
@@ -42,7 +47,7 @@ fn test_inline_executor() {
     assert_eq!(val, 1);
 }
 
-thread_local!(static QUEUE: UnsafeCell<VecDeque<Box<FnBox()>>>
+thread_local!(static QUEUE: UnsafeCell<VecDeque<Box<FnBox() + Send>>>
               = UnsafeCell::new(VecDeque::new()));
 
 /// Runs inline like InlineExecutor, but with a queue so that any tasks added
@@ -57,13 +62,22 @@ impl QueuedImmediateExecutor {
 }
 
 impl Executor for QueuedImmediateExecutor {
-    fn add<F>(&self, work: Box<F>) -> ()
-        where F: FnBox(), F: 'static {
+    fn add<'a, 'b>(&'a self, work: Box<FnBox() + Send + 'b>) -> ()
+        where 'b : 'a {
         QUEUE.with(|queue| {
             unsafe {
-                let queue = queue.get();
+                let queue : *mut VecDeque<Box<FnBox() + Send + 'static>> = queue.get();
                 if (*queue).is_empty() {
-                    (*queue).push_back(work);
+                    // We have to transmute the work to pretend it has
+                    // 'static lifetime so we can stuff it into the thread local
+                    // queue. However this is reasonably safe since the work is
+                    // guaranteed to live longer than the Executor and in most
+                    // cases the Executor should be fully consuming the work.
+                    // Only edge case that comes to mind is if the work/closure
+                    // had some RAII items it was using to signal behavior, but
+                    // that seems okay to break.
+                    // TODO(ptc) see if there's a better way around this transmute
+                    (*queue).push_back(mem::transmute(work));
                     while !(*queue).is_empty() {
                         // TODO(ptc) Since we have to own the Box<FnBox> in order
                         // to call it we have to pop it off the queue, but that
@@ -78,7 +92,7 @@ impl Executor for QueuedImmediateExecutor {
                         let _discarded_placeholder = (*queue).pop_front();
                     }
                 } else {
-                    (*queue).push_back(work);
+                    (*queue).push_back(mem::transmute(work));
                 }
             }
         });
@@ -88,6 +102,7 @@ impl Executor for QueuedImmediateExecutor {
 #[test]
 fn test_queued_executor() {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::mem;
 
     let queued = QueuedImmediateExecutor::new();
     let cntr = AtomicUsize::new(0);

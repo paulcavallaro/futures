@@ -1,7 +1,8 @@
-#![feature(unboxed_closures)]
 #![feature(asm)]
-#![feature(fnbox)]
 #![feature(const_fn)]
+#![feature(fnbox)]
+#![feature(repr_simd)]
+#![feature(unboxed_closures)]
 
 extern crate libc;
 
