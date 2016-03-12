@@ -73,12 +73,12 @@ pub enum State {
 
 /// Core is the shared struct between Future and Promise that
 /// implements the core functionality
-pub struct Core<'a, T> {
+pub struct Core<'a, T, E> {
     /// TODO(ptc) See if we can do the actual trick of C++ styel placement
     /// new of the Box<FnBox()> into callback or if that's just faulty
     /// translation/thinking
     callback : AlignedAs<Box<FnBox()>, CacheLine>,
-    result : Option<Try<T>>,
+    result : Option<Try<T, E>>,
     state : FSM,
     /// TODO(ptc) Shouldn't need an entire u64 to store the number of attached
     attached : AtomicUsize,
@@ -94,8 +94,8 @@ pub struct Core<'a, T> {
 }
 
 /// TODO(ptc) implement Try
-pub struct Try<T> {
-    foo : T,
+pub struct Try<T, E> {
+    result : Result<T, E>,
 }
 
 /// TODO(ptc) implement RequestContext

@@ -88,6 +88,7 @@ impl MicroSpinLock {
                 sleeper.wait()
             }
         }
+        debug_assert!(self.lock.load(Ordering::SeqCst) == LOCKED);
     }
 
     pub fn unlock(&self) {
@@ -97,7 +98,8 @@ impl MicroSpinLock {
 
     #[inline(always)]
     fn cas(&self, compare : bool, new_val : bool) -> bool {
-        self.lock.compare_and_swap(compare, new_val, Ordering::AcqRel)
+        self.lock.compare_exchange(compare, new_val,
+                                   Ordering::Acquire, Ordering::Relaxed)
     }
 }
 
@@ -154,4 +156,28 @@ fn test_microspinlock_spin() {
     assert!(!spinlock.try_lock());
     spinlock.unlock();
     let _res = child.join();
+}
+
+#[cfg(test)]
+mod tests {
+    use test::{Bencher};
+    use super::*;
+    use std::sync::{Mutex};
+
+    #[bench]
+    fn bench_uncontended_microspinlock(b : &mut Bencher) {
+        let spinlock = MicroSpinLock::new();
+        b.iter(|| {
+            spinlock.lock();
+            spinlock.unlock();
+        })
+    }
+
+    #[bench]
+    fn bench_uncontended_mutex(b : &mut Bencher) {
+        let mutex = Mutex::new(0);
+        b.iter(|| {
+            let _raii = mutex.lock().unwrap();
+        })
+    }
 }
