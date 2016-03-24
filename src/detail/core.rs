@@ -1,5 +1,6 @@
 use std::boxed::{Box, FnBox};
 use std::error::{Error};
+use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc};
 
@@ -91,6 +92,17 @@ pub struct Core<'a, T, E> {
     context : Arc<RequestContext>,
     interrupt : Box<Error>,
     interrupt_handler : Box<FnBox(Error)>,
+}
+
+impl<'a, T, E> Core<'a, T, E> {
+    fn detach_one(&self) -> () {
+        let attached = self.attached.fetch_sub(1, Ordering::SeqCst) - 1;
+        assert!(attached >= 0);
+        assert!(attached <= 2);
+        if attached == 0 {
+            mem::drop(self)
+        }
+    }
 }
 
 /// TODO(ptc) implement Try
