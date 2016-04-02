@@ -47,7 +47,7 @@ impl FSM {
     /// Atomically do a state transition with accompanying action.
     /// The action will see the old state.
     /// returns true on success, false and action unexecuted otherwise
-    pub fn update_state<F>(&mut self, old_state : State, new_state : State,
+    pub fn update_state<F>(&self, old_state : State, new_state : State,
                            action : F) -> bool
         where F : FnOnce() {
         if !self.lock.try_lock() {
@@ -62,14 +62,40 @@ impl FSM {
         self.lock.unlock();
         return true;
     }
+
+    pub fn update_state2<F1, F2>(&self, old_state : State, new_state : State,
+                                 protected_action : F1, unprotected_action : F2) -> bool
+        where F1 : FnOnce(), F2 : FnOnce() {
+        let result = self.update_state(old_state, new_state, protected_action);
+        if result {
+            unprotected_action();
+        }
+        result
+    }
+
+    pub fn get_state(&self) -> State {
+        unsafe {
+            return mem::transmute(self.state.load(Ordering::Acquire) as u8);
+        }
+    }
 }
 
+#[derive(PartialEq, Debug)]
 pub enum State {
     Start,
     OnlyResult,
     OnlyCallback,
     Armed,
     Done,
+}
+
+#[test]
+fn back_and_forth_state() {
+    assert_eq!(FSM::new(State::Start).get_state(), State::Start);
+    assert_eq!(FSM::new(State::OnlyResult).get_state(), State::OnlyResult);
+    assert_eq!(FSM::new(State::OnlyCallback).get_state(), State::OnlyCallback);
+    assert_eq!(FSM::new(State::Armed).get_state(), State::Armed);
+    assert_eq!(FSM::new(State::Done).get_state(), State::Done);
 }
 
 /// Core is the shared struct between Future and Promise that
@@ -116,6 +142,50 @@ impl<T, E> Core<T, E> {
     fn set_executor_nolock(&mut self, exec : &'static Executor, priority : u8) {
         self.executor = exec;
         self.priority = priority;
+    }
+
+    fn get_executor(&self) -> &'static Executor {
+        return self.executor;
+    }
+
+    /// May call from any thread
+    fn is_active(&self) -> bool {
+        return self.active.load(Ordering::Acquire);
+    }
+
+    /// May call from any thread
+    fn deactivate(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+
+    /// May call from any thread
+    fn activate(&self) {
+        self.active.store(true, Ordering::Release);
+        self.maybe_callback();
+    }
+
+    fn maybe_callback(&self) {
+        let mut done = false;
+        while !done {
+            let state = self.state.get_state();
+            match state {
+                State::Armed => {
+                    if self.active.load(Ordering::Acquire) {
+                        self.state.update_state2(state, State::Done, || {}, || {
+                            self.do_callback();
+                        });
+                    }
+                    done = true;
+                },
+                _ => {
+                    done = true;
+                }
+            };
+        }
+    }
+
+    fn do_callback(&self) -> () {
+        // TODO(ptc) implement do_callback
     }
 }
 
