@@ -74,8 +74,8 @@ pub enum State {
 
 /// Core is the shared struct between Future and Promise that
 /// implements the core functionality
-pub struct Core<'a, T, E> {
-    /// TODO(ptc) See if we can do the actual trick of C++ styel placement
+pub struct Core<T, E> {
+    /// TODO(ptc) See if we can do the actual trick of C++ style placement
     /// new of the Box<FnBox()> into callback or if that's just faulty
     /// translation/thinking
     callback : AlignedAs<Box<FnBox()>, CacheLine>,
@@ -88,13 +88,13 @@ pub struct Core<'a, T, E> {
     interrupt_lock : MicroSpinLock,
     executor_lock : MicroSpinLock,
     priority : u8,
-    executor : &'a Executor,
+    executor : &'static Executor,
     context : Arc<RequestContext>,
     interrupt : Box<Error>,
     interrupt_handler : Box<FnBox(Error)>,
 }
 
-impl<'a, T, E> Core<'a, T, E> {
+impl<T, E> Core<T, E> {
     fn detach_one(&self) -> () {
         let attached = self.attached.fetch_sub(1, Ordering::SeqCst) - 1;
         assert!(attached >= 0);
@@ -102,6 +102,20 @@ impl<'a, T, E> Core<'a, T, E> {
         if attached == 0 {
             mem::drop(self)
         }
+    }
+
+    fn set_executor(&mut self, exec : &'static Executor, priority : u8) {
+        if !self.executor_lock.try_lock() {
+            self.executor_lock.lock();
+        }
+        self.executor = exec;
+        self.priority = priority;
+        self.executor_lock.unlock();
+    }
+
+    fn set_executor_nolock(&mut self, exec : &'static Executor, priority : u8) {
+        self.executor = exec;
+        self.priority = priority;
     }
 }
 
