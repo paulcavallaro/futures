@@ -11,5 +11,6 @@ extern crate test;
 
 pub mod executor;
 pub mod microspinlock;
+pub mod scopeguard;
 pub mod future;
 mod detail;

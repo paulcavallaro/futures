@@ -80,7 +80,7 @@ impl FSM {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum State {
     Start,
     OnlyResult,
@@ -185,7 +185,21 @@ impl<T, E> Core<T, E> {
     }
 
     fn do_callback(&self) -> () {
-        // TODO(ptc) implement do_callback
+        // Grab the current executor
+        if !self.executor_lock.try_lock() {
+            self.executor_lock.lock();
+        }
+        let executor = self.executor;
+        let priority = self.priority;
+        self.executor_lock.unlock();
+
+        // Keep Core alive until callback is run
+        self.attached.fetch_add(1, Ordering::SeqCst);
+
+        // See if rust has llvm.expect intrinsic exposed
+        if executor.get_num_priorities() == 1 {
+            // TODO(ptc) finish implementation
+        }
     }
 }
 

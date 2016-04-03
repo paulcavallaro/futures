@@ -13,6 +13,10 @@ pub trait Executor {
     /// can execute it and consume its lifetime.
     fn add<'a, 'b>(&'a self, work: Box<FnBox() + Send + 'b>) -> ()
         where 'b : 'a;
+
+    fn get_num_priorities(&self) -> u8 {
+        return 1
+    }
 }
 
 pub struct InlineExecutor;
