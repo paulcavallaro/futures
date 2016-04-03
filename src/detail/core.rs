@@ -1,11 +1,13 @@
 use std::boxed::{Box, FnBox};
 use std::error::{Error};
+use std::cell::{UnsafeCell};
 use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc};
 
 use executor::{Executor};
 use microspinlock::{MicroSpinLock};
+use scopeguard::{ScopeGuard};
 
 /// Assume a cache line is 64 bytes
 #[repr(simd)]
@@ -16,13 +18,21 @@ struct CacheLine(
 /// to different sizes.
 struct AlignedAs<T, A>(T, [A;0]);
 
+impl<T,A> AlignedAs<T, A> {
+    pub fn new(item : T) -> AlignedAs<T, A> {
+        return AlignedAs(item, [])
+    }
+
+    pub fn get(self) -> T {
+        return self.0;
+    }
+}
 
 #[test]
 fn is_cache_line_64_bytes() {
     use std::mem;
     assert_eq!(mem::size_of::<CacheLine>(), 64);
 }
-
 
 /// A helper struct for writing Finite State Machines
 /// TODO(ptc) Make state an enum type param if we can
@@ -104,8 +114,8 @@ pub struct Core<T, E> {
     /// TODO(ptc) See if we can do the actual trick of C++ style placement
     /// new of the Box<FnBox()> into callback or if that's just faulty
     /// translation/thinking
-    callback : AlignedAs<Box<FnBox()>, CacheLine>,
-    result : Option<Try<T, E>>,
+    callback : UnsafeCell<Box<FnBox(Try<T, E>)>>,
+    result : UnsafeCell<Option<Try<T, E>>>,
     state : FSM,
     /// TODO(ptc) Shouldn't need an entire u64 to store the number of attached
     attached : AtomicUsize,
@@ -198,8 +208,22 @@ impl<T, E> Core<T, E> {
 
         // See if rust has llvm.expect intrinsic exposed
         if executor.get_num_priorities() == 1 {
-            // TODO(ptc) finish implementation
+            scope_exit!(self.detach_one());
+            RequestContext::set_context(self.context.clone());
+            unsafe {
+                let result = self.result.get();
+                let callback = mem::replace(& mut (*self.callback.get()), Box::new(|_try| {}));
+                if let Some(try) = (*result).take() {
+                    callback(try);
+                }
+            }
+        } else {
+            // TODO(ptc) implement add_with_priority to executors
         }
+        // NOTE(ptc) Folly::Future allows executor to be null and then calls
+        // the callback inline. Currently we do not allow that, but maybe
+        // there is a good reason to do so, although unsure why this just
+        // couldn't be done with InlineExecutor.
     }
 }
 
@@ -210,3 +234,9 @@ pub struct Try<T, E> {
 
 /// TODO(ptc) implement RequestContext
 pub struct RequestContext;
+
+impl RequestContext {
+    pub fn set_context(ctxt : Arc<RequestContext>) {
+        // TODO(ptc) implement
+    }
+}

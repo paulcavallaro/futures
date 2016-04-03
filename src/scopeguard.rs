@@ -1,7 +1,7 @@
 use std::marker::{PhantomData};
 
 #[must_use]
-struct ScopeGuard<'a, F> where F : 'a + FnOnce() {
+pub struct ScopeGuard<'a, F> where F : 'a + FnOnce() {
     pub cleanup : Option<F>,
     phantom : PhantomData<&'a F>,
 }
@@ -23,6 +23,7 @@ impl<'a, F> Drop for ScopeGuard<'a, F> where F : 'a + FnOnce() {
     }
 }
 
+#[macro_export]
 macro_rules! scope_exit {
     ($e:expr) => {
         let x = ScopeGuard::new(|| { $e })
