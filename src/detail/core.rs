@@ -110,7 +110,7 @@ fn back_and_forth_state() {
 
 /// Core is the shared struct between Future and Promise that
 /// implements the core functionality
-pub struct Core<T, E> {
+pub struct Core<T, E> where E : Error {
     /// TODO(ptc) See if we can do the actual trick of C++ style placement
     /// new of the Box<FnBox()> into callback or if that's just faulty
     /// translation/thinking
@@ -123,14 +123,35 @@ pub struct Core<T, E> {
     interrupt_handler_set : AtomicBool,
     interrupt_lock : MicroSpinLock,
     executor_lock : MicroSpinLock,
-    priority : u8,
+    priority : i8,
+    // TODO(ptc) Fix this static borrowed executor, just doesn't seem right
+    // and will almost certainly be a pain later in development
     executor : &'static Executor,
     context : Arc<RequestContext>,
-    interrupt : Box<Error>,
-    interrupt_handler : Box<FnBox(Error)>,
+    interrupt : UnsafeCell<Option<E>>,
+    interrupt_handler : UnsafeCell<Option<Box<FnBox(E)>>>,
 }
 
-impl<T, E> Core<T, E> {
+impl<T, E> Core<T, E> where E : Error {
+
+    fn new(executor : &'static Executor) -> Core<T,E> {
+        Core {
+            callback : UnsafeCell::new(Box::new(|_| {})),
+            result : UnsafeCell::new(None),
+            state : FSM::new(State::Start),
+            attached : AtomicUsize::new(2),
+            active : AtomicBool::new(true),
+            interrupt_handler_set : AtomicBool::new(false),
+            interrupt_lock : MicroSpinLock::new(),
+            executor_lock : MicroSpinLock::new(),
+            priority : -1,
+            executor : executor,
+            context : Arc::new(RequestContext::new()),
+            interrupt : UnsafeCell::new(None),
+            interrupt_handler : UnsafeCell::new(None),
+        }
+    }
+
     fn detach_one(&self) -> () {
         let attached = self.attached.fetch_sub(1, Ordering::SeqCst) - 1;
         assert!(attached >= 0);
@@ -140,7 +161,7 @@ impl<T, E> Core<T, E> {
         }
     }
 
-    fn set_executor(&mut self, exec : &'static Executor, priority : u8) {
+    fn set_executor(&mut self, exec : &'static Executor, priority : i8) {
         if !self.executor_lock.try_lock() {
             self.executor_lock.lock();
         }
@@ -149,7 +170,7 @@ impl<T, E> Core<T, E> {
         self.executor_lock.unlock();
     }
 
-    fn set_executor_nolock(&mut self, exec : &'static Executor, priority : u8) {
+    fn set_executor_nolock(&mut self, exec : &'static Executor, priority : i8) {
         self.executor = exec;
         self.priority = priority;
     }
@@ -172,6 +193,42 @@ impl<T, E> Core<T, E> {
     fn activate(&self) {
         self.active.store(true, Ordering::Release);
         self.maybe_callback();
+    }
+
+    fn has_result(&self) -> bool {
+        match self.state.get_state() {
+            State::OnlyCallback => { return false; },
+            State::Start => { return false; },
+            State::OnlyResult => {
+                unsafe { assert!((*self.result.get()).is_some()); }
+                return true;
+            },
+            State::Armed => {
+                unsafe { assert!((*self.result.get()).is_some()); }
+                return true;
+            },
+            State::Done => {
+                unsafe { assert!((*self.result.get()).is_some()); }
+                return true;
+            },
+        }
+    }
+
+    fn raise(&self, err : E) {
+        if !self.interrupt_lock.try_lock() {
+            self.interrupt_lock.lock();
+        }
+        unsafe {
+            if (*self.interrupt.get()).is_none() && !self.has_result() {
+                *self.interrupt.get() = Some(err);
+                if (*self.interrupt_handler.get()).is_some() {
+                    let func = (*self.interrupt_handler.get()).take().unwrap();
+                    let err = (*self.interrupt.get()).take().unwrap();
+                    func.call_box((err,));
+                }
+            }
+        }
+        self.interrupt_lock.unlock();
     }
 
     fn maybe_callback(&self) {
@@ -236,7 +293,29 @@ pub struct Try<T, E> {
 pub struct RequestContext;
 
 impl RequestContext {
+    pub fn new() -> RequestContext {
+        RequestContext
+    }
+
     pub fn set_context(ctxt : Arc<RequestContext>) {
         // TODO(ptc) implement
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+
+    use std::io::{Error, ErrorKind};
+    use executor::{InlineExecutor};
+    use super::{Core};
+
+    #[test]
+    fn core_raise() {
+        static executor : InlineExecutor = InlineExecutor::new();
+        let core : Core<usize, Error> = Core::new(&executor);
+        let err = Error::new(ErrorKind::Other, "bollocks!");
+        core.raise(err);
+        // TODO(ptc) implement and test setting the interrupt handler
     }
 }

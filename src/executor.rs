@@ -25,8 +25,8 @@ pub struct InlineExecutor;
 /// Usually when you think you want this, you actually want a
 /// QueuedImmediateExecutor.
 impl InlineExecutor {
-    pub fn new() -> InlineExecutor {
-        return InlineExecutor
+    pub const fn new() -> InlineExecutor {
+        InlineExecutor
     }
 }
 
