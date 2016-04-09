@@ -231,6 +231,31 @@ impl<T, E> Core<T, E> where E : Error {
         self.interrupt_lock.unlock();
     }
 
+    /// Should only be called from Promise thread
+    fn set_interrupt_handler(&self, handler : Box<FnBox(E)>) {
+        if !self.interrupt_lock.try_lock() {
+            self.interrupt_lock.lock();
+        }
+        unsafe {
+            if !self.has_result() {
+                if (*self.interrupt.get()).is_some() {
+                    let err = (*self.interrupt.get()).take().unwrap();
+                    handler.call_box((err,));
+                } else {
+                    self.set_interrupt_handler_nolock(handler);
+                }
+            }
+        }
+        self.interrupt_lock.unlock();
+    }
+
+    fn set_interrupt_handler_nolock(&self, handler : Box<FnBox(E)>) {
+        self.interrupt_handler_set.store(true, Ordering::Relaxed);
+        unsafe {
+            *self.interrupt_handler.get() = Some(handler);
+        }
+    }
+
     fn maybe_callback(&self) {
         let mut done = false;
         while !done {
@@ -309,13 +334,32 @@ mod tests {
     use std::io::{Error, ErrorKind};
     use executor::{InlineExecutor};
     use super::{Core};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn core_raise() {
+    fn raise_set_handler_after() {
         static executor : InlineExecutor = InlineExecutor::new();
+        static counter : AtomicUsize = AtomicUsize::new(0);
         let core : Core<usize, Error> = Core::new(&executor);
         let err = Error::new(ErrorKind::Other, "bollocks!");
         core.raise(err);
-        // TODO(ptc) implement and test setting the interrupt handler
+        core.set_interrupt_handler(Box::new(|e| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn raise_set_handler_before() {
+        static executor : InlineExecutor = InlineExecutor::new();
+        static counter : AtomicUsize = AtomicUsize::new(0);
+        let core : Core<usize, Error> = Core::new(&executor);
+        let err = Error::new(ErrorKind::Other, "bollocks!");
+        core.set_interrupt_handler(Box::new(|e| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        core.raise(err);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 }
