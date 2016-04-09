@@ -129,7 +129,7 @@ pub struct Core<T, E> where E : Error {
     executor : &'static Executor,
     context : Arc<RequestContext>,
     interrupt : UnsafeCell<Option<E>>,
-    interrupt_handler : UnsafeCell<Option<Box<FnBox(E)>>>,
+    interrupt_handler : UnsafeCell<Option<Arc<Fn(E)>>>,
 }
 
 impl<T, E> Core<T, E> where E : Error {
@@ -224,7 +224,7 @@ impl<T, E> Core<T, E> where E : Error {
                 if (*self.interrupt_handler.get()).is_some() {
                     let func = (*self.interrupt_handler.get()).take().unwrap();
                     let err = (*self.interrupt.get()).take().unwrap();
-                    func.call_box((err,));
+                    func(err);
                 }
             }
         }
@@ -232,7 +232,7 @@ impl<T, E> Core<T, E> where E : Error {
     }
 
     /// Should only be called from Promise thread
-    fn set_interrupt_handler(&self, handler : Box<FnBox(E)>) {
+    fn set_interrupt_handler(&self, handler : Arc<Fn(E)>) {
         if !self.interrupt_lock.try_lock() {
             self.interrupt_lock.lock();
         }
@@ -240,7 +240,7 @@ impl<T, E> Core<T, E> where E : Error {
             if !self.has_result() {
                 if (*self.interrupt.get()).is_some() {
                     let err = (*self.interrupt.get()).take().unwrap();
-                    handler.call_box((err,));
+                    handler(err);
                 } else {
                     self.set_interrupt_handler_nolock(handler);
                 }
@@ -249,10 +249,24 @@ impl<T, E> Core<T, E> where E : Error {
         self.interrupt_lock.unlock();
     }
 
-    fn set_interrupt_handler_nolock(&self, handler : Box<FnBox(E)>) {
+    fn set_interrupt_handler_nolock(&self, handler : Arc<Fn(E)>) {
         self.interrupt_handler_set.store(true, Ordering::Relaxed);
         unsafe {
             *self.interrupt_handler.get() = Some(handler);
+        }
+    }
+
+    fn get_interrupt_handler(&self) -> Option<Arc<Fn(E)>> {
+        if !self.interrupt_handler_set.load(Ordering::Acquire) {
+            return None;
+        }
+        if !self.interrupt_lock.try_lock() {
+            self.interrupt_lock.lock();
+        }
+        unsafe {
+            let handler = (*self.interrupt_handler.get()).clone();
+            self.interrupt_lock.unlock();
+            return handler;
         }
     }
 
@@ -332,9 +346,11 @@ impl RequestContext {
 mod tests {
 
     use std::io::{Error, ErrorKind};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc};
+
     use executor::{InlineExecutor};
     use super::{Core};
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn raise_set_handler_after() {
@@ -343,7 +359,7 @@ mod tests {
         let core : Core<usize, Error> = Core::new(&executor);
         let err = Error::new(ErrorKind::Other, "bollocks!");
         core.raise(err);
-        core.set_interrupt_handler(Box::new(|e| {
+        core.set_interrupt_handler(Arc::new(|e| {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
         assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -355,7 +371,7 @@ mod tests {
         static counter : AtomicUsize = AtomicUsize::new(0);
         let core : Core<usize, Error> = Core::new(&executor);
         let err = Error::new(ErrorKind::Other, "bollocks!");
-        core.set_interrupt_handler(Box::new(|e| {
+        core.set_interrupt_handler(Arc::new(|e| {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
         assert_eq!(counter.load(Ordering::SeqCst), 0);
