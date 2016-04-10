@@ -129,7 +129,7 @@ pub struct Core<T, E> where E : Error {
     executor : &'static Executor,
     context : Arc<RequestContext>,
     interrupt : UnsafeCell<Option<E>>,
-    interrupt_handler : UnsafeCell<Option<Arc<Fn(E)>>>,
+    interrupt_handler : UnsafeCell<Option<Arc<Fn(&E)>>>,
 }
 
 impl<T, E> Core<T, E> where E : Error {
@@ -222,8 +222,8 @@ impl<T, E> Core<T, E> where E : Error {
             if (*self.interrupt.get()).is_none() && !self.has_result() {
                 *self.interrupt.get() = Some(err);
                 if (*self.interrupt_handler.get()).is_some() {
-                    let func = (*self.interrupt_handler.get()).take().unwrap();
-                    let err = (*self.interrupt.get()).take().unwrap();
+                    let func = (*self.interrupt_handler.get()).clone().unwrap();
+                    let err = (*self.interrupt.get()).as_ref().unwrap();
                     func(err);
                 }
             }
@@ -232,14 +232,16 @@ impl<T, E> Core<T, E> where E : Error {
     }
 
     /// Should only be called from Promise thread
-    fn set_interrupt_handler(&self, handler : Arc<Fn(E)>) {
+    /// Sets the interrupt handler on the Core object, if it already has
+    /// an exception/interrupt than just cann the handler on the interrupt
+    fn set_interrupt_handler(&self, handler : Arc<Fn(&E)>) {
         if !self.interrupt_lock.try_lock() {
             self.interrupt_lock.lock();
         }
         unsafe {
             if !self.has_result() {
                 if (*self.interrupt.get()).is_some() {
-                    let err = (*self.interrupt.get()).take().unwrap();
+                    let err = (*self.interrupt.get()).as_ref().unwrap();
                     handler(err);
                 } else {
                     self.set_interrupt_handler_nolock(handler);
@@ -249,14 +251,14 @@ impl<T, E> Core<T, E> where E : Error {
         self.interrupt_lock.unlock();
     }
 
-    fn set_interrupt_handler_nolock(&self, handler : Arc<Fn(E)>) {
+    fn set_interrupt_handler_nolock(&self, handler : Arc<Fn(&E)>) {
         self.interrupt_handler_set.store(true, Ordering::Relaxed);
         unsafe {
             *self.interrupt_handler.get() = Some(handler);
         }
     }
 
-    fn get_interrupt_handler(&self) -> Option<Arc<Fn(E)>> {
+    fn get_interrupt_handler(&self) -> Option<Arc<Fn(&E)>> {
         if !self.interrupt_handler_set.load(Ordering::Acquire) {
             return None;
         }
@@ -359,10 +361,20 @@ mod tests {
         let core : Core<usize, Error> = Core::new(&executor);
         let err = Error::new(ErrorKind::Other, "bollocks!");
         core.raise(err);
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
         core.set_interrupt_handler(Arc::new(|e| {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
+        // Should call interrupt handler immediately and not bind it
+        assert!(core.get_interrupt_handler().is_none());
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+        // Setting the interrupt handler again will call the handler
+        // but still not bind it
+        core.set_interrupt_handler(Arc::new(|e| {
+            counter.fetch_add(4, Ordering::SeqCst);
+        }));
+        assert_eq!(counter.load(Ordering::SeqCst), 5);
+        assert!(core.get_interrupt_handler().is_none());
     }
 
     #[test]
@@ -370,12 +382,20 @@ mod tests {
         static executor : InlineExecutor = InlineExecutor::new();
         static counter : AtomicUsize = AtomicUsize::new(0);
         let core : Core<usize, Error> = Core::new(&executor);
-        let err = Error::new(ErrorKind::Other, "bollocks!");
         core.set_interrupt_handler(Arc::new(|e| {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
+        assert!(core.get_interrupt_handler().is_some());
         assert_eq!(counter.load(Ordering::SeqCst), 0);
-        core.raise(err);
+        core.raise(Error::new(ErrorKind::Other, "bollocks!"));
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+        // Can't raise twice, won't reset current interrupt, nor call
+        // handler twice
+        core.raise(Error::new(ErrorKind::Other, "bollocks!"));
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        // Should be able to get handler and call it though
+        let handler = core.get_interrupt_handler().unwrap();
+        handler(&Error::new(ErrorKind::Other, "bollocks!"));
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 }
