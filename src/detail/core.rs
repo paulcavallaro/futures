@@ -3,6 +3,7 @@ use std::cell::{UnsafeCell};
 use std::io::{ErrorKind};
 use std::io;
 use std::mem;
+use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc};
 
@@ -183,8 +184,35 @@ impl<T> Core<T> {
         self.detach_one();
     }
 
+    /// Call only from Promise thread
     fn set_result(&self, res : Try<T, io::Error>) {
-        // TODO(ptc) implement and test detach_promise and set_result
+        let mut transition_to_armed = false;
+        let res = UnsafeCell::new(Some(res));
+        // TODO(ptc) investigate porting over the FSM_START/FSM_UPDATE/FSM_CASE
+        // macros
+        let mut done = false;
+        while !done {
+            let state = self.state.get_state();
+            match state {
+                State::Start => {
+                    done = self.state.update_state(state, State::OnlyResult, || unsafe {
+                        ptr::swap(self.result.get(), res.get());
+                    });
+                },
+                State::OnlyCallback => {
+                    done = self.state.update_state(state, State::Armed, || unsafe {
+                        ptr::swap(self.result.get(), res.get());
+                    });
+                    transition_to_armed = true;
+                },
+                State::OnlyResult => { panic!("logic error: setResult called twice"); },
+                State::Armed => { panic!("logic error: setResult called twice"); },
+                State::Done => { panic!("logic error: setResult called twice"); },
+            }
+        }
+        if transition_to_armed {
+            self.maybe_callback();
+        }
     }
 
     fn set_executor(&mut self, exec : &'static Executor, priority : i8) {
@@ -352,6 +380,7 @@ impl<T> Core<T> {
 }
 
 /// TODO(ptc) implement Try
+#[derive(Debug)]
 pub struct Try<T, E> {
     result : Result<T, E>,
 }
@@ -386,7 +415,7 @@ mod tests {
     use std::sync::{Arc};
 
     use executor::{InlineExecutor};
-    use super::{Core};
+    use super::{Core, Try};
 
     #[test]
     fn raise_set_handler_after() {
@@ -431,5 +460,26 @@ mod tests {
         let handler = core.get_interrupt_handler().unwrap();
         handler(&Error::new(ErrorKind::Other, "bollocks!"));
         assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "logic error: setResult called twice")]
+    fn set_result_twice() {
+        static executor : InlineExecutor = InlineExecutor::new();
+        static counter : AtomicUsize = AtomicUsize::new(0);
+        let core : Core<usize> = Core::new(&executor);
+        let mut try = Try::new(Ok(1));
+        core.set_result(try);
+        try = Try::new(Ok(2));
+        core.set_result(try);
+    }
+
+    #[test]
+    fn set_result_once() {
+        static executor : InlineExecutor = InlineExecutor::new();
+        static counter : AtomicUsize = AtomicUsize::new(0);
+        let core : Core<usize> = Core::new(&executor);
+        let try = Try::new(Ok(1));
+        core.set_result(try);
     }
 }
