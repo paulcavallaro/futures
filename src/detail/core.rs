@@ -1,6 +1,7 @@
 use std::boxed::{Box, FnBox};
-use std::error::{Error};
 use std::cell::{UnsafeCell};
+use std::io::{ErrorKind};
+use std::io;
 use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc};
@@ -110,12 +111,12 @@ fn back_and_forth_state() {
 
 /// Core is the shared struct between Future and Promise that
 /// implements the core functionality
-pub struct Core<T, E> where E : Error {
+pub struct Core<T> {
     /// TODO(ptc) See if we can do the actual trick of C++ style placement
     /// new of the Box<FnBox()> into callback or if that's just faulty
     /// translation/thinking
-    callback : UnsafeCell<Box<FnBox(Try<T, E>)>>,
-    result : UnsafeCell<Option<Try<T, E>>>,
+    callback : UnsafeCell<Box<FnBox(Try<T, io::Error>)>>,
+    result : UnsafeCell<Option<Try<T, io::Error>>>,
     state : FSM,
     /// TODO(ptc) Shouldn't need an entire u64 to store the number of attached
     attached : AtomicUsize,
@@ -128,13 +129,13 @@ pub struct Core<T, E> where E : Error {
     // and will almost certainly be a pain later in development
     executor : &'static Executor,
     context : Arc<RequestContext>,
-    interrupt : UnsafeCell<Option<E>>,
-    interrupt_handler : UnsafeCell<Option<Arc<Fn(&E)>>>,
+    interrupt : UnsafeCell<Option<io::Error>>,
+    interrupt_handler : UnsafeCell<Option<Arc<Fn(&io::Error)>>>,
 }
 
-impl<T, E> Core<T, E> where E : Error {
+impl<T> Core<T> {
 
-    fn new(executor : &'static Executor) -> Core<T,E> {
+    fn new(executor : &'static Executor) -> Core<T> {
         Core {
             callback : UnsafeCell::new(Box::new(|_| {})),
             result : UnsafeCell::new(None),
@@ -157,8 +158,33 @@ impl<T, E> Core<T, E> where E : Error {
         assert!(attached >= 0);
         assert!(attached <= 2);
         if attached == 0 {
+            // TODO(ptc) make sure this actually runs the destructor
             mem::drop(self)
         }
+    }
+
+    /// Called by a destructing Future from the Future thread
+    fn detach_future(&self) {
+        self.activate();
+        self.detach_one();
+    }
+
+    /// Called by a destructing Promise from the Promise thread
+    fn detach_promise(&self) {
+        // detach_promise() and set_result() should never be called in parallel
+        // so we don't need to protect this.
+        unsafe {
+            // TODO(ptc) use UNLIKELY here
+            if (*self.result.get()).is_none() {
+                self.set_result(Try::new(
+                    Err(io::Error::new(ErrorKind::Other, "Broken Promise"))));
+            }
+        }
+        self.detach_one();
+    }
+
+    fn set_result(&self, res : Try<T, io::Error>) {
+        // TODO(ptc) implement and test detach_promise and set_result
     }
 
     fn set_executor(&mut self, exec : &'static Executor, priority : i8) {
@@ -214,7 +240,7 @@ impl<T, E> Core<T, E> where E : Error {
         }
     }
 
-    fn raise(&self, err : E) {
+    fn raise(&self, err : io::Error) {
         if !self.interrupt_lock.try_lock() {
             self.interrupt_lock.lock();
         }
@@ -234,7 +260,7 @@ impl<T, E> Core<T, E> where E : Error {
     /// Should only be called from Promise thread
     /// Sets the interrupt handler on the Core object, if it already has
     /// an exception/interrupt than just cann the handler on the interrupt
-    fn set_interrupt_handler(&self, handler : Arc<Fn(&E)>) {
+    fn set_interrupt_handler(&self, handler : Arc<Fn(&io::Error)>) {
         if !self.interrupt_lock.try_lock() {
             self.interrupt_lock.lock();
         }
@@ -251,14 +277,14 @@ impl<T, E> Core<T, E> where E : Error {
         self.interrupt_lock.unlock();
     }
 
-    fn set_interrupt_handler_nolock(&self, handler : Arc<Fn(&E)>) {
+    fn set_interrupt_handler_nolock(&self, handler : Arc<Fn(&io::Error)>) {
         self.interrupt_handler_set.store(true, Ordering::Relaxed);
         unsafe {
             *self.interrupt_handler.get() = Some(handler);
         }
     }
 
-    fn get_interrupt_handler(&self) -> Option<Arc<Fn(&E)>> {
+    fn get_interrupt_handler(&self) -> Option<Arc<Fn(&io::Error)>> {
         if !self.interrupt_handler_set.load(Ordering::Acquire) {
             return None;
         }
@@ -330,6 +356,14 @@ pub struct Try<T, E> {
     result : Result<T, E>,
 }
 
+impl<T, E> Try<T, E> {
+    fn new(res : Result<T, E>) -> Try<T, E> {
+        Try {
+            result : res,
+        }
+    }
+}
+
 /// TODO(ptc) implement RequestContext
 pub struct RequestContext;
 
@@ -358,7 +392,7 @@ mod tests {
     fn raise_set_handler_after() {
         static executor : InlineExecutor = InlineExecutor::new();
         static counter : AtomicUsize = AtomicUsize::new(0);
-        let core : Core<usize, Error> = Core::new(&executor);
+        let core : Core<usize> = Core::new(&executor);
         let err = Error::new(ErrorKind::Other, "bollocks!");
         core.raise(err);
         assert_eq!(counter.load(Ordering::SeqCst), 0);
@@ -381,7 +415,7 @@ mod tests {
     fn raise_set_handler_before() {
         static executor : InlineExecutor = InlineExecutor::new();
         static counter : AtomicUsize = AtomicUsize::new(0);
-        let core : Core<usize, Error> = Core::new(&executor);
+        let core : Core<usize> = Core::new(&executor);
         core.set_interrupt_handler(Arc::new(|e| {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
