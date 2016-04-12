@@ -184,10 +184,53 @@ impl<T> Core<T> {
         self.detach_one();
     }
 
+    /// Call only from Future thread
+    fn set_callback<'a, 'b, F>(&'a self, func : F)
+        // TODO(ptc) get rid of this 'static shenanigans everywhere
+        where F : FnOnce(Try<T, io::Error>) + 'static {
+        let mut transition_to_armed = false;
+        let callback : UnsafeCell<Box<FnBox(Try<T, io::Error>)>> =
+            UnsafeCell::new(Box::new(func));
+        let mut set_callback_ = || unsafe {
+            let context = RequestContext::save_context();
+
+            // TODO(ptc) if we do change to having a space to put the lambda
+            // inline with the Core object, here is where we would check the
+            // size of the callback and place there if it fits
+
+            ptr::swap(self.callback.get(), callback.get());
+        };
+        let mut done = false;
+        while !done {
+            let state = self.state.get_state();
+            match state {
+                State::Start => {
+                    done = self.state.update_state(state, State::OnlyCallback,
+                                                   &mut set_callback_);
+                },
+                State::OnlyResult => {
+                    done = self.state.update_state(state, State::Armed,
+                                                   &mut set_callback_);
+                    transition_to_armed = true;
+                }
+                State::OnlyCallback => { panic!("logic error: set_callback called twice"); },
+                State::Armed => { panic!("logic error: set_callback called twice"); },
+                State::Done => { panic!("logic error: set_callback called twice"); },
+            }
+        }
+
+        if transition_to_armed {
+            self.maybe_callback();
+        }
+    }
+
     /// Call only from Promise thread
     fn set_result(&self, res : Try<T, io::Error>) {
         let mut transition_to_armed = false;
         let res = UnsafeCell::new(Some(res));
+        let mut set_result_ = || unsafe {
+            ptr::swap(self.result.get(), res.get());
+        };
         // TODO(ptc) investigate porting over the FSM_START/FSM_UPDATE/FSM_CASE
         // macros
         let mut done = false;
@@ -195,19 +238,16 @@ impl<T> Core<T> {
             let state = self.state.get_state();
             match state {
                 State::Start => {
-                    done = self.state.update_state(state, State::OnlyResult, || unsafe {
-                        ptr::swap(self.result.get(), res.get());
-                    });
+                    done = self.state.update_state(state, State::OnlyResult,
+                                                   &mut set_result_);
                 },
                 State::OnlyCallback => {
-                    done = self.state.update_state(state, State::Armed, || unsafe {
-                        ptr::swap(self.result.get(), res.get());
-                    });
+                    done = self.state.update_state(state, State::Armed, &mut set_result_);
                     transition_to_armed = true;
                 },
-                State::OnlyResult => { panic!("logic error: setResult called twice"); },
-                State::Armed => { panic!("logic error: setResult called twice"); },
-                State::Done => { panic!("logic error: setResult called twice"); },
+                State::OnlyResult => { panic!("logic error: set_result called twice"); },
+                State::Armed => { panic!("logic error: set_result called twice"); },
+                State::Done => { panic!("logic error: set_result called twice"); },
             }
         }
         if transition_to_armed {
@@ -404,6 +444,11 @@ impl RequestContext {
     pub fn set_context(ctxt : Arc<RequestContext>) {
         // TODO(ptc) implement
     }
+
+    pub fn save_context() -> Arc<RequestContext> {
+        // TODO(ptc) implement
+        return Arc::new(RequestContext::new());
+    }
 }
 
 
@@ -417,11 +462,12 @@ mod tests {
     use executor::{InlineExecutor};
     use super::{Core, Try};
 
+    static INLINE_EXECUTOR : InlineExecutor = InlineExecutor::new();
+
     #[test]
     fn raise_set_handler_after() {
-        static executor : InlineExecutor = InlineExecutor::new();
         static counter : AtomicUsize = AtomicUsize::new(0);
-        let core : Core<usize> = Core::new(&executor);
+        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
         let err = Error::new(ErrorKind::Other, "bollocks!");
         core.raise(err);
         assert_eq!(counter.load(Ordering::SeqCst), 0);
@@ -442,9 +488,8 @@ mod tests {
 
     #[test]
     fn raise_set_handler_before() {
-        static executor : InlineExecutor = InlineExecutor::new();
         static counter : AtomicUsize = AtomicUsize::new(0);
-        let core : Core<usize> = Core::new(&executor);
+        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
         core.set_interrupt_handler(Arc::new(|e| {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
@@ -463,11 +508,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "logic error: setResult called twice")]
+    #[should_panic(expected = "logic error: set_result called twice")]
     fn set_result_twice() {
-        static executor : InlineExecutor = InlineExecutor::new();
         static counter : AtomicUsize = AtomicUsize::new(0);
-        let core : Core<usize> = Core::new(&executor);
+        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
         let mut try = Try::new(Ok(1));
         core.set_result(try);
         try = Try::new(Ok(2));
@@ -476,10 +520,43 @@ mod tests {
 
     #[test]
     fn set_result_once() {
-        static executor : InlineExecutor = InlineExecutor::new();
         static counter : AtomicUsize = AtomicUsize::new(0);
-        let core : Core<usize> = Core::new(&executor);
+        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
         let try = Try::new(Ok(1));
         core.set_result(try);
+    }
+
+    #[test]
+    #[should_panic(expected = "logic error: set_callback called twice")]
+    fn set_callback_twice() {
+        static counter : AtomicUsize = AtomicUsize::new(0);
+        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+        core.set_callback(|_| {});
+        core.set_callback(|_| {});
+    }
+
+    #[test]
+    fn set_result_then_set_callback() {
+        static counter : AtomicUsize = AtomicUsize::new(0);
+        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+        let try = Try::new(Ok(1));
+        core.set_result(try);
+        core.set_callback(|_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn set_callback_then_set_result() {
+        static counter : AtomicUsize = AtomicUsize::new(0);
+        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+        core.set_callback(|_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        let try = Try::new(Ok(1));
+        core.set_result(try);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 }
