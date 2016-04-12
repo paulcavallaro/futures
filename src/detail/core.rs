@@ -458,6 +458,7 @@ mod tests {
     use std::io::{Error, ErrorKind};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc};
+    use test::{Bencher};
 
     use executor::{InlineExecutor};
     use super::{Core, Try};
@@ -558,5 +559,17 @@ mod tests {
         let try = Try::new(Ok(1));
         core.set_result(try);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[bench]
+    fn set_callback_then_set_result_bench(b : &mut Bencher) {
+        static counter : AtomicUsize = AtomicUsize::new(0);
+        b.iter(|| {
+            let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+            core.set_callback(|_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            });
+            core.set_result(Try::new(Ok(1)));
+        });
     }
 }
