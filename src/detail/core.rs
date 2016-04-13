@@ -10,6 +10,7 @@ use std::sync::{Arc};
 use executor::{Executor};
 use microspinlock::{MicroSpinLock};
 use scopeguard::{ScopeGuard};
+use try::{Try};
 
 /// Assume a cache line is 64 bytes
 #[repr(simd)]
@@ -177,8 +178,7 @@ impl<T> Core<T> {
         unsafe {
             // TODO(ptc) use UNLIKELY here
             if (*self.result.get()).is_none() {
-                self.set_result(Try::new(
-                    Err(io::Error::new(ErrorKind::Other, "Broken Promise"))));
+                self.set_result(Try::new_error(io::Error::new(ErrorKind::Other, "Broken Promise")));
             }
         }
         self.detach_one();
@@ -419,20 +419,6 @@ impl<T> Core<T> {
     }
 }
 
-/// TODO(ptc) implement Try
-#[derive(Debug)]
-pub struct Try<T, E> {
-    result : Result<T, E>,
-}
-
-impl<T, E> Try<T, E> {
-    fn new(res : Result<T, E>) -> Try<T, E> {
-        Try {
-            result : res,
-        }
-    }
-}
-
 /// TODO(ptc) implement RequestContext
 pub struct RequestContext;
 
@@ -461,76 +447,74 @@ mod tests {
     use test::{Bencher};
 
     use executor::{InlineExecutor};
-    use super::{Core, Try};
+    use super::{Core};
+    use try::{Try};
 
     static INLINE_EXECUTOR : InlineExecutor = InlineExecutor::new();
 
     #[test]
     fn raise_set_handler_after() {
-        static counter : AtomicUsize = AtomicUsize::new(0);
+        static COUNTER : AtomicUsize = AtomicUsize::new(0);
         let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
         let err = Error::new(ErrorKind::Other, "bollocks!");
         core.raise(err);
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
-        core.set_interrupt_handler(Arc::new(|e| {
-            counter.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 0);
+        core.set_interrupt_handler(Arc::new(|_| {
+            COUNTER.fetch_add(1, Ordering::SeqCst);
         }));
         // Should call interrupt handler immediately and not bind it
         assert!(core.get_interrupt_handler().is_none());
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
         // Setting the interrupt handler again will call the handler
         // but still not bind it
-        core.set_interrupt_handler(Arc::new(|e| {
-            counter.fetch_add(4, Ordering::SeqCst);
+        core.set_interrupt_handler(Arc::new(|_| {
+            COUNTER.fetch_add(4, Ordering::SeqCst);
         }));
-        assert_eq!(counter.load(Ordering::SeqCst), 5);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 5);
         assert!(core.get_interrupt_handler().is_none());
     }
 
     #[test]
     fn raise_set_handler_before() {
-        static counter : AtomicUsize = AtomicUsize::new(0);
+        static COUNTER : AtomicUsize = AtomicUsize::new(0);
         let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
-        core.set_interrupt_handler(Arc::new(|e| {
-            counter.fetch_add(1, Ordering::SeqCst);
+        core.set_interrupt_handler(Arc::new(|_| {
+            COUNTER.fetch_add(1, Ordering::SeqCst);
         }));
         assert!(core.get_interrupt_handler().is_some());
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 0);
         core.raise(Error::new(ErrorKind::Other, "bollocks!"));
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
         // Can't raise twice, won't reset current interrupt, nor call
         // handler twice
         core.raise(Error::new(ErrorKind::Other, "bollocks!"));
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
         // Should be able to get handler and call it though
         let handler = core.get_interrupt_handler().unwrap();
         handler(&Error::new(ErrorKind::Other, "bollocks!"));
-        assert_eq!(counter.load(Ordering::SeqCst), 2);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
     }
 
     #[test]
     #[should_panic(expected = "logic error: set_result called twice")]
     fn set_result_twice() {
-        static counter : AtomicUsize = AtomicUsize::new(0);
         let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
-        let mut try = Try::new(Ok(1));
+        let mut try = Try::new_value(1);
         core.set_result(try);
-        try = Try::new(Ok(2));
+        try = Try::new_value(2);
         core.set_result(try);
     }
 
     #[test]
     fn set_result_once() {
-        static counter : AtomicUsize = AtomicUsize::new(0);
         let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
-        let try = Try::new(Ok(1));
+        let try = Try::new_value(1);
         core.set_result(try);
     }
 
     #[test]
     #[should_panic(expected = "logic error: set_callback called twice")]
     fn set_callback_twice() {
-        static counter : AtomicUsize = AtomicUsize::new(0);
         let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
         core.set_callback(|_| {});
         core.set_callback(|_| {});
@@ -538,38 +522,38 @@ mod tests {
 
     #[test]
     fn set_result_then_set_callback() {
-        static counter : AtomicUsize = AtomicUsize::new(0);
+        static COUNTER : AtomicUsize = AtomicUsize::new(0);
         let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
-        let try = Try::new(Ok(1));
+        let try = Try::new_value(1);
         core.set_result(try);
         core.set_callback(|_| {
-            counter.fetch_add(1, Ordering::SeqCst);
+            COUNTER.fetch_add(1, Ordering::SeqCst);
         });
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
     }
 
     #[test]
     fn set_callback_then_set_result() {
-        static counter : AtomicUsize = AtomicUsize::new(0);
+        static COUNTER : AtomicUsize = AtomicUsize::new(0);
         let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
         core.set_callback(|_| {
-            counter.fetch_add(1, Ordering::SeqCst);
+            COUNTER.fetch_add(1, Ordering::SeqCst);
         });
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
-        let try = Try::new(Ok(1));
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 0);
+        let try = Try::new_value(1);
         core.set_result(try);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
     }
 
     #[bench]
     fn set_callback_then_set_result_bench(b : &mut Bencher) {
-        static counter : AtomicUsize = AtomicUsize::new(0);
+        static COUNTER : AtomicUsize = AtomicUsize::new(0);
         b.iter(|| {
             let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
             core.set_callback(|_| {
-                counter.fetch_add(1, Ordering::SeqCst);
+                COUNTER.fetch_add(1, Ordering::SeqCst);
             });
-            core.set_result(Try::new(Ok(1)));
+            core.set_result(Try::new_value(1));
         });
     }
 }

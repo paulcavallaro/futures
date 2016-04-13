@@ -26,10 +26,10 @@ impl<'a, F> Drop for ScopeGuard<'a, F> where F : 'a + FnOnce() {
 #[macro_export]
 macro_rules! scope_exit {
     ($e:expr) => {
-        let x = ScopeGuard::new(|| { $e })
+        let gensym = ScopeGuard::new(|| { $e })
     };
     ($b:block) => {
-        let x = ScopeGuard::new(|| { $b })
+        let gensym = ScopeGuard::new(|| { $b })
     };
 }
 

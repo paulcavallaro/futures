@@ -15,3 +15,4 @@ pub mod microspinlock;
 pub mod scopeguard;
 pub mod future;
 mod detail;
+mod try;
