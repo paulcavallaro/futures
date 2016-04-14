@@ -11,6 +11,7 @@ use executor::{Executor};
 use microspinlock::{MicroSpinLock};
 use scopeguard::{ScopeGuard};
 use try::{Try};
+use future::{Future};
 
 /// Assume a cache line is 64 bytes
 #[repr(simd)]
@@ -117,8 +118,8 @@ pub struct Core<T> {
     /// TODO(ptc) See if we can do the actual trick of C++ style placement
     /// new of the Box<FnBox()> into callback or if that's just faulty
     /// translation/thinking
-    callback : UnsafeCell<Box<FnBox(Try<T, io::Error>)>>,
-    result : UnsafeCell<Option<Try<T, io::Error>>>,
+    callback : UnsafeCell<Box<FnBox(Try<T>) + 'static>>,
+    result : UnsafeCell<Option<Try<T>>>,
     state : FSM,
     /// TODO(ptc) Shouldn't need an entire u64 to store the number of attached
     attached : AtomicUsize,
@@ -137,7 +138,8 @@ pub struct Core<T> {
 
 impl<T> Core<T> {
 
-    fn new(executor : &'static Executor) -> Core<T> {
+    // TODO(ptc) Might have to finally clean up this static executor horse-poo
+    pub fn new(executor : &'static Executor) -> Core<T> {
         Core {
             callback : UnsafeCell::new(Box::new(|_| {})),
             result : UnsafeCell::new(None),
@@ -166,13 +168,13 @@ impl<T> Core<T> {
     }
 
     /// Called by a destructing Future from the Future thread
-    fn detach_future(&self) {
+    pub fn detach_future(&self) {
         self.activate();
         self.detach_one();
     }
 
     /// Called by a destructing Promise from the Promise thread
-    fn detach_promise(&self) {
+    pub fn detach_promise(&self) {
         // detach_promise() and set_result() should never be called in parallel
         // so we don't need to protect this.
         unsafe {
@@ -185,11 +187,11 @@ impl<T> Core<T> {
     }
 
     /// Call only from Future thread
-    fn set_callback<'a, 'b, F>(&'a self, func : F)
+    pub fn set_callback<F>(&self, func : F)
         // TODO(ptc) get rid of this 'static shenanigans everywhere
-        where F : FnOnce(Try<T, io::Error>) + 'static {
+        where F : FnOnce(Try<T>) + 'static {
         let mut transition_to_armed = false;
-        let callback : UnsafeCell<Box<FnBox(Try<T, io::Error>)>> =
+        let callback : UnsafeCell<Box<FnBox(Try<T>) + 'static>> =
             UnsafeCell::new(Box::new(func));
         let mut set_callback_ = || unsafe {
             let context = RequestContext::save_context();
@@ -225,7 +227,7 @@ impl<T> Core<T> {
     }
 
     /// Call only from Promise thread
-    fn set_result(&self, res : Try<T, io::Error>) {
+    fn set_result(&self, res : Try<T>) {
         let mut transition_to_armed = false;
         let res = UnsafeCell::new(Some(res));
         let mut set_result_ = || unsafe {
@@ -255,7 +257,7 @@ impl<T> Core<T> {
         }
     }
 
-    fn set_executor(&mut self, exec : &'static Executor, priority : i8) {
+    pub fn set_executor(&mut self, exec : &'static Executor, priority : i8) {
         if !self.executor_lock.try_lock() {
             self.executor_lock.lock();
         }
@@ -269,7 +271,7 @@ impl<T> Core<T> {
         self.priority = priority;
     }
 
-    fn get_executor(&self) -> &'static Executor {
+    pub fn get_executor(&self) -> &'static Executor {
         return self.executor;
     }
 

@@ -1,4 +1,4 @@
-
+use std::io;
 
 #[derive(Debug)]
 enum Contains<T, E> {
@@ -9,24 +9,24 @@ enum Contains<T, E> {
 
 /// TODO(ptc) implement Try
 #[derive(Debug)]
-pub struct Try<T, E> {
-    contains : Contains<T, E>,
+pub struct Try<T> {
+    contains : Contains<T, io::Error>,
 }
 
-impl<T, E> Try<T, E> {
-    pub fn new() -> Try<T, E> {
+impl<T> Try<T> {
+    pub fn new() -> Try<T> {
         Try {
             contains : Contains::NOTHING,
         }
     }
 
-    pub fn new_error(err : E) -> Try<T, E> {
+    pub fn new_error(err : io::Error) -> Try<T> {
         Try {
             contains : Contains::ERROR(err),
         }
     }
 
-    pub fn new_value(val : T) -> Try<T, E> {
+    pub fn new_value(val : T) -> Try<T> {
         Try {
             contains : Contains::VALUE(val),
         }
@@ -45,6 +45,15 @@ impl<T, E> Try<T, E> {
             _ => false,
         }
     }
+
+    pub fn value(self) -> Result<T, io::Error> {
+        match self.contains {
+            Contains::VALUE(val) => Ok(val),
+            Contains::ERROR(err) => Err(err),
+            Contains::NOTHING => Err(io::Error::new(
+                io::ErrorKind::Other, "Using Uninitialized Try")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -56,13 +65,13 @@ mod tests {
 
     #[test]
     fn test_has_error_has_value() {
-        let empty : Try<usize, io::Error> = Try::new();
+        let empty : Try<usize> = Try::new();
         assert_eq!(empty.has_value(), false);
         assert_eq!(empty.has_error(), false);
-        let value : Try<usize, io::Error> = Try::new_value(10);
+        let value : Try<usize> = Try::new_value(10);
         assert_eq!(value.has_value(), true);
         assert_eq!(value.has_error(), false);
-        let error : Try<usize, io::Error> = Try::new_error(
+        let error : Try<usize> = Try::new_error(
             io::Error::new(io::ErrorKind::Other, "error"));
         assert_eq!(error.has_value(), false);
         assert_eq!(error.has_error(), true);
