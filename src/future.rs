@@ -10,6 +10,7 @@ pub struct Future<T> {
     core_ptr : *mut Core<T>,
 }
 
+// TODO(ptc) Remove this executor horse shitttt
 static INLINE_EXECUTOR : InlineExecutor = InlineExecutor::new();
 
 impl<T> Drop for Future<T> {
@@ -23,6 +24,7 @@ impl<T> Drop for Future<T> {
 impl<T> Future<T> {
     pub fn new(try : Try<T>) -> Future<T> {
         Future {
+            // TODO(ptc) Core::new should take a Try
             core_ptr : Box::into_raw(Box::new(Core::new(&INLINE_EXECUTOR))),
         }
     }
@@ -64,8 +66,17 @@ impl<T> Future<T> {
     pub fn then<F, U>(&self, func : F) -> Future<U>
         where F : FnOnce(Try<T>) -> Future<U> {
         self.panic_if_invalid();
-        // TODO(ptc) implement the rest of then
+        // TODO(ptc) implement the rest of then by creating promise then setting
+        // the callback to fulfill the promise and returning the future for that
+        // promise
         panic!("Not implemented")
+    }
+
+    pub fn value(&self) -> Result<T, io::Error> {
+        self.panic_if_invalid();
+        unsafe {
+            return (*self.core_ptr).get_try().value();
+        }
     }
 }
 

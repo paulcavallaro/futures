@@ -4,4 +4,4 @@ A project inspired by [folly Futures](https://github.com/facebook/folly/tree/mas
 
 ## Notes
 
-Currently (as of 2/28/2016) only works on nightly rust due to usage of FnBox.
+Currently (as of 4/15/2016) only works on nightly rust due to usage of FnBox.

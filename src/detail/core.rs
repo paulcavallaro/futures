@@ -368,6 +368,21 @@ impl<T> Core<T> {
         }
     }
 
+    /// Can call from any thread
+    pub fn ready(&self) -> bool {
+        return self.has_result();
+    }
+
+    pub fn get_try(&self) -> Try<T> {
+        if self.ready() {
+            unsafe {
+                return (*self.result.get()).take().unwrap();
+            }
+        } else {
+            panic!("Future not ready")
+        }
+    }
+
     fn maybe_callback(&self) {
         let mut done = false;
         while !done {

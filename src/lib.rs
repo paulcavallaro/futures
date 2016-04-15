@@ -14,5 +14,6 @@ pub mod microspinlock;
 #[macro_use]
 pub mod scopeguard;
 pub mod future;
+pub mod promise;
 mod detail;
 mod try;
