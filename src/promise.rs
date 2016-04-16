@@ -16,16 +16,11 @@ impl<T> Drop for Promise<T> {
     }
 }
 
-
-// TODO(ptc) Remove this executor horse shitttt
-static INLINE_EXECUTOR : InlineExecutor = InlineExecutor::new();
-
-
 impl<T> Promise<T> {
     pub fn new() -> Promise<T> {
         Promise {
             retrieved : false,
-            core_ptr : Box::into_raw(Box::new(Core::new(&INLINE_EXECUTOR))),
+            core_ptr : Box::into_raw(Box::new(Core::new())),
         }
     }
 

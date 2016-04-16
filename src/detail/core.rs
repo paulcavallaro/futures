@@ -7,7 +7,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc};
 
-use executor::{Executor};
+use executor::{InlineExecutor, Executor};
 use microspinlock::{MicroSpinLock};
 use scopeguard::{ScopeGuard};
 use try::{Try};
@@ -128,18 +128,21 @@ pub struct Core<T> {
     interrupt_lock : MicroSpinLock,
     executor_lock : MicroSpinLock,
     priority : i8,
-    // TODO(ptc) Fix this static borrowed executor, just doesn't seem right
-    // and will almost certainly be a pain later in development
-    executor : &'static Executor,
+    executor : *const Executor,
     context : Arc<RequestContext>,
     interrupt : UnsafeCell<Option<io::Error>>,
     interrupt_handler : UnsafeCell<Option<Arc<Fn(&io::Error)>>>,
 }
 
+struct NullExecutor(usize,usize);
+
+unsafe fn null_executor() -> *const Executor {
+    return mem::transmute([0 as usize;2]);
+}
+
 impl<T> Core<T> {
 
-    // TODO(ptc) Might have to finally clean up this static executor horse-poo
-    pub fn new(executor : &'static Executor) -> Core<T> {
+    pub fn new() -> Core<T> {
         Core {
             callback : UnsafeCell::new(Box::new(|_| {})),
             result : UnsafeCell::new(None),
@@ -150,7 +153,27 @@ impl<T> Core<T> {
             interrupt_lock : MicroSpinLock::new(),
             executor_lock : MicroSpinLock::new(),
             priority : -1,
-            executor : executor,
+            // TODO(ptc) fix this when ptr::null doesn't need to be sized
+            executor : unsafe { null_executor() },
+            context : Arc::new(RequestContext::new()),
+            interrupt : UnsafeCell::new(None),
+            interrupt_handler : UnsafeCell::new(None),
+        }
+    }
+
+    pub fn new_try(try : Try<T>) -> Core<T> {
+        Core {
+            callback : UnsafeCell::new(Box::new(|_| {})),
+            result : UnsafeCell::new(Some(try)),
+            state : FSM::new(State::OnlyResult),
+            attached : AtomicUsize::new(1),
+            active : AtomicBool::new(true),
+            interrupt_handler_set : AtomicBool::new(false),
+            interrupt_lock : MicroSpinLock::new(),
+            executor_lock : MicroSpinLock::new(),
+            priority : -1,
+            // TODO(ptc) fix this when ptr::null doesn't need to be sized
+            executor : unsafe { null_executor() },
             context : Arc::new(RequestContext::new()),
             interrupt : UnsafeCell::new(None),
             interrupt_handler : UnsafeCell::new(None),
@@ -257,7 +280,7 @@ impl<T> Core<T> {
         }
     }
 
-    pub fn set_executor(&mut self, exec : &'static Executor, priority : i8) {
+    pub fn set_executor(&mut self, exec : *const Executor, priority : i8) {
         if !self.executor_lock.try_lock() {
             self.executor_lock.lock();
         }
@@ -266,12 +289,12 @@ impl<T> Core<T> {
         self.executor_lock.unlock();
     }
 
-    fn set_executor_nolock(&mut self, exec : &'static Executor, priority : i8) {
+    fn set_executor_nolock(&mut self, exec : *const Executor, priority : i8) {
         self.executor = exec;
         self.priority = priority;
     }
 
-    pub fn get_executor(&self) -> &'static Executor {
+    pub fn get_executor(&self) -> *const Executor {
         return self.executor;
     }
 
@@ -416,7 +439,21 @@ impl<T> Core<T> {
         self.attached.fetch_add(1, Ordering::SeqCst);
 
         // See if rust has llvm.expect intrinsic exposed
-        if executor.get_num_priorities() == 1 {
+        if unsafe { executor != null_executor() } {
+            if unsafe { (*executor).get_num_priorities() == 1 } {
+                scope_exit!(self.detach_one());
+                RequestContext::set_context(self.context.clone());
+                unsafe {
+                    let result = self.result.get();
+                    let callback = mem::replace(& mut (*self.callback.get()), Box::new(|_try| {}));
+                    if let Some(try) = (*result).take() {
+                        callback(try);
+                    }
+                }
+            } else {
+                // TODO(ptc) implement add_with_priority to executors
+            }
+        } else {
             scope_exit!(self.detach_one());
             RequestContext::set_context(self.context.clone());
             unsafe {
@@ -426,8 +463,6 @@ impl<T> Core<T> {
                     callback(try);
                 }
             }
-        } else {
-            // TODO(ptc) implement add_with_priority to executors
         }
         // NOTE(ptc) Folly::Future allows executor to be null and then calls
         // the callback inline. Currently we do not allow that, but maybe
@@ -467,12 +502,10 @@ mod tests {
     use super::{Core};
     use try::{Try};
 
-    static INLINE_EXECUTOR : InlineExecutor = InlineExecutor::new();
-
     #[test]
     fn raise_set_handler_after() {
         static COUNTER : AtomicUsize = AtomicUsize::new(0);
-        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+        let core : Core<usize> = Core::new();
         let err = Error::new(ErrorKind::Other, "bollocks!");
         core.raise(err);
         assert_eq!(COUNTER.load(Ordering::SeqCst), 0);
@@ -494,7 +527,7 @@ mod tests {
     #[test]
     fn raise_set_handler_before() {
         static COUNTER : AtomicUsize = AtomicUsize::new(0);
-        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+        let core : Core<usize> = Core::new();
         core.set_interrupt_handler(Arc::new(|_| {
             COUNTER.fetch_add(1, Ordering::SeqCst);
         }));
@@ -515,7 +548,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "logic error: set_result called twice")]
     fn set_result_twice() {
-        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+        let core : Core<usize> = Core::new();
         let mut try = Try::new_value(1);
         core.set_result(try);
         try = Try::new_value(2);
@@ -524,7 +557,7 @@ mod tests {
 
     #[test]
     fn set_result_once() {
-        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+        let core : Core<usize> = Core::new();
         let try = Try::new_value(1);
         core.set_result(try);
     }
@@ -532,7 +565,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "logic error: set_callback called twice")]
     fn set_callback_twice() {
-        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+        let core : Core<usize> = Core::new();
         core.set_callback(|_| {});
         core.set_callback(|_| {});
     }
@@ -540,7 +573,7 @@ mod tests {
     #[test]
     fn set_result_then_set_callback() {
         static COUNTER : AtomicUsize = AtomicUsize::new(0);
-        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+        let core : Core<usize> = Core::new();
         let try = Try::new_value(1);
         core.set_result(try);
         core.set_callback(|_| {
@@ -552,7 +585,7 @@ mod tests {
     #[test]
     fn set_callback_then_set_result() {
         static COUNTER : AtomicUsize = AtomicUsize::new(0);
-        let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+        let core : Core<usize> = Core::new();
         core.set_callback(|_| {
             COUNTER.fetch_add(1, Ordering::SeqCst);
         });
@@ -566,7 +599,7 @@ mod tests {
     fn set_callback_then_set_result_bench(b : &mut Bencher) {
         static COUNTER : AtomicUsize = AtomicUsize::new(0);
         b.iter(|| {
-            let core : Core<usize> = Core::new(&INLINE_EXECUTOR);
+            let core : Core<usize> = Core::new();
             core.set_callback(|_| {
                 COUNTER.fetch_add(1, Ordering::SeqCst);
             });

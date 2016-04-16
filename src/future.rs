@@ -10,9 +10,6 @@ pub struct Future<T> {
     core_ptr : *mut Core<T>,
 }
 
-// TODO(ptc) Remove this executor horse shitttt
-static INLINE_EXECUTOR : InlineExecutor = InlineExecutor::new();
-
 impl<T> Drop for Future<T> {
     fn drop(&mut self) {
         unsafe {
@@ -24,8 +21,7 @@ impl<T> Drop for Future<T> {
 impl<T> Future<T> {
     pub fn new(try : Try<T>) -> Future<T> {
         Future {
-            // TODO(ptc) Core::new should take a Try
-            core_ptr : Box::into_raw(Box::new(Core::new(&INLINE_EXECUTOR))),
+            core_ptr : Box::into_raw(Box::new(Core::new_try(try))),
         }
     }
 
@@ -36,13 +32,13 @@ impl<T> Future<T> {
         }
     }
 
-    pub fn get_executor(&self) -> &'static Executor {
+    pub fn get_executor(&self) -> *const Executor {
         unsafe {
             (*self.core_ptr).get_executor()
         }
     }
 
-    pub fn set_executor(&self, x : &'static Executor) {
+    pub fn set_executor(&self, x : *const Executor) {
         unsafe {
             (*self.core_ptr).set_executor(x, -1)
         }
@@ -84,12 +80,22 @@ impl<T> Future<T> {
 #[cfg(test)]
 mod tests {
 
+    use test::{Bencher};
+
     use super::{Future};
     use try::{Try};
 
+
     #[test]
-    fn test_then_try() {
+    fn test_future_value() {
         let future = Future::new(Try::new_value(0));
-        future.get_executor();
+        assert_eq!(future.value().unwrap(), 0);
+    }
+
+    #[bench]
+    fn bench_constant_future(b : &mut Bencher) {
+        b.iter(|| {
+            let future = Future::new(Try::new_value(0));
+        })
     }
 }
