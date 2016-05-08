@@ -74,7 +74,7 @@ impl MicroSpinLock {
     /// Tries to acquire the spinlock.
     /// Returns true if it acquires it, false otherwise
     pub fn try_lock(&self) -> bool {
-        return self.cas(FREE, LOCKED) == FREE
+        return self.cas(FREE, LOCKED);
     }
 
     pub fn lock(&self) {
@@ -97,9 +97,10 @@ impl MicroSpinLock {
     }
 
     #[inline(always)]
+    /// Returns true if updated, false if not
     fn cas(&self, compare : bool, new_val : bool) -> bool {
         self.lock.compare_exchange(compare, new_val,
-                                   Ordering::Acquire, Ordering::Relaxed)
+                                   Ordering::Acquire, Ordering::Relaxed).is_ok()
     }
 }
 
