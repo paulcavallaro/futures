@@ -1,28 +1,24 @@
 use std::io;
 use std::ptr;
 
-use detail::core::{Core};
+use detail::core::Core;
 use executor::{InlineExecutor, Executor};
-use try::{Try};
+use try::Try;
 
 
 pub struct Future<T> {
-    core_ptr : *mut Core<T>,
+    core_ptr: *mut Core<T>,
 }
 
 impl<T> Drop for Future<T> {
     fn drop(&mut self) {
-        unsafe {
-            self.detach()
-        }
+        unsafe { self.detach() }
     }
 }
 
 impl<T> Future<T> {
-    pub fn new(try : Try<T>) -> Future<T> {
-        Future {
-            core_ptr : Box::into_raw(Box::new(Core::new_try(try))),
-        }
+    pub fn new(try: Try<T>) -> Future<T> {
+        Future { core_ptr: Box::into_raw(Box::new(Core::new_try(try))) }
     }
 
     fn detach(&mut self) {
@@ -33,15 +29,11 @@ impl<T> Future<T> {
     }
 
     pub fn get_executor(&self) -> *const Executor {
-        unsafe {
-            (*self.core_ptr).get_executor()
-        }
+        unsafe { (*self.core_ptr).get_executor() }
     }
 
-    pub fn set_executor(&self, x : *const Executor) {
-        unsafe {
-            (*self.core_ptr).set_executor(x, -1)
-        }
+    pub fn set_executor(&self, x: *const Executor) {
+        unsafe { (*self.core_ptr).set_executor(x, -1) }
     }
 
     fn panic_if_invalid(&self) {
@@ -51,16 +43,18 @@ impl<T> Future<T> {
         }
     }
 
-    fn set_callback<F>(&mut self, func : F)
-        where F : FnOnce(Try<T>) + 'static {
+    fn set_callback<F>(&mut self, func: F)
+        where F: FnOnce(Try<T>) + 'static
+    {
         self.panic_if_invalid();
         unsafe {
             (*self.core_ptr).set_callback(func);
         }
     }
 
-    pub fn then<F, U>(&self, func : F) -> Future<U>
-        where F : FnOnce(Try<T>) -> Future<U> {
+    pub fn then<F, U>(&self, func: F) -> Future<U>
+        where F: FnOnce(Try<T>) -> Future<U>
+    {
         self.panic_if_invalid();
         // TODO(ptc) implement the rest of then by creating promise then setting
         // the callback to fulfill the promise and returning the future for that
@@ -80,10 +74,10 @@ impl<T> Future<T> {
 #[cfg(test)]
 mod tests {
 
-    use test::{Bencher};
+    use test::Bencher;
 
-    use super::{Future};
-    use try::{Try};
+    use super::Future;
+    use try::Try;
 
 
     #[test]
@@ -93,7 +87,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_constant_future(b : &mut Bencher) {
+    fn bench_constant_future(b: &mut Bencher) {
         b.iter(|| {
             let future = Future::new(Try::new_value(0));
         })

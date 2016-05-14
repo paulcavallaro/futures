@@ -10,26 +10,20 @@ enum Contains<T, E> {
 /// TODO(ptc) implement Try
 #[derive(Debug)]
 pub struct Try<T> {
-    contains : Contains<T, io::Error>,
+    contains: Contains<T, io::Error>,
 }
 
 impl<T> Try<T> {
     pub fn new() -> Try<T> {
-        Try {
-            contains : Contains::NOTHING,
-        }
+        Try { contains: Contains::NOTHING }
     }
 
-    pub fn new_error(err : io::Error) -> Try<T> {
-        Try {
-            contains : Contains::ERROR(err),
-        }
+    pub fn new_error(err: io::Error) -> Try<T> {
+        Try { contains: Contains::ERROR(err) }
     }
 
-    pub fn new_value(val : T) -> Try<T> {
-        Try {
-            contains : Contains::VALUE(val),
-        }
+    pub fn new_value(val: T) -> Try<T> {
+        Try { contains: Contains::VALUE(val) }
     }
 
     pub fn has_error(&self) -> bool {
@@ -50,8 +44,9 @@ impl<T> Try<T> {
         match self.contains {
             Contains::VALUE(val) => Ok(val),
             Contains::ERROR(err) => Err(err),
-            Contains::NOTHING => Err(io::Error::new(
-                io::ErrorKind::Other, "Using Uninitialized Try")),
+            Contains::NOTHING => {
+                Err(io::Error::new(io::ErrorKind::Other, "Using Uninitialized Try"))
+            }
         }
     }
 }
@@ -61,18 +56,17 @@ mod tests {
 
     use std::io;
 
-    use super::{Try};
+    use super::Try;
 
     #[test]
     fn test_has_error_has_value() {
-        let empty : Try<usize> = Try::new();
+        let empty: Try<usize> = Try::new();
         assert_eq!(empty.has_value(), false);
         assert_eq!(empty.has_error(), false);
-        let value : Try<usize> = Try::new_value(10);
+        let value: Try<usize> = Try::new_value(10);
         assert_eq!(value.has_value(), true);
         assert_eq!(value.has_error(), false);
-        let error : Try<usize> = Try::new_error(
-            io::Error::new(io::ErrorKind::Other, "error"));
+        let error: Try<usize> = Try::new_error(io::Error::new(io::ErrorKind::Other, "error"));
         assert_eq!(error.has_value(), false);
         assert_eq!(error.has_error(), true);
     }

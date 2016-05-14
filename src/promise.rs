@@ -1,26 +1,24 @@
 use std::ptr;
 
-use detail::core::{Core};
-use executor::{InlineExecutor};
+use detail::core::Core;
+use executor::InlineExecutor;
 
 struct Promise<T> {
-    core_ptr : *mut Core<T>,
-    retrieved : bool,
+    core_ptr: *mut Core<T>,
+    retrieved: bool,
 }
 
 impl<T> Drop for Promise<T> {
     fn drop(&mut self) {
-        unsafe {
-            self.detach()
-        }
+        unsafe { self.detach() }
     }
 }
 
 impl<T> Promise<T> {
     pub fn new() -> Promise<T> {
         Promise {
-            retrieved : false,
-            core_ptr : Box::into_raw(Box::new(Core::new())),
+            retrieved: false,
+            core_ptr: Box::into_raw(Box::new(Core::new())),
         }
     }
 

@@ -11,11 +11,10 @@ pub trait Executor {
     /// We ensure that the work to be done will outlive the Executor
     /// ensuring that the work will be alive by the time the Executor
     /// can execute it and consume its lifetime.
-    fn add<'a, 'b>(&'a self, work: Box<FnBox() + Send + 'b>) -> ()
-        where 'b : 'a;
+    fn add<'a, 'b>(&'a self, work: Box<FnBox() + Send + 'b>) -> () where 'b: 'a;
 
     fn get_num_priorities(&self) -> u8 {
-        return 1
+        return 1;
     }
 }
 
@@ -32,7 +31,8 @@ impl InlineExecutor {
 
 impl Executor for InlineExecutor {
     fn add<'a, 'b>(&'a self, work: Box<FnBox() + Send + 'b>) -> ()
-        where 'b : 'a {
+        where 'b: 'a
+    {
         work.call_box(());
     }
 }
@@ -67,10 +67,11 @@ impl QueuedImmediateExecutor {
 
 impl Executor for QueuedImmediateExecutor {
     fn add<'a, 'b>(&'a self, work: Box<FnBox() + Send + 'b>) -> ()
-        where 'b : 'a {
+        where 'b: 'a
+    {
         QUEUE.with(|queue| {
             unsafe {
-                let queue : *mut VecDeque<Box<FnBox() + Send + 'static>> = queue.get();
+                let queue: *mut VecDeque<Box<FnBox() + Send + 'static>> = queue.get();
                 if (*queue).is_empty() {
                     // We have to transmute the work to pretend it has
                     // 'static lifetime so we can stuff it into the thread local
@@ -91,7 +92,9 @@ impl Executor for QueuedImmediateExecutor {
                         // Figure out a better way to do this so we
                         // don't need a placeholder
                         let fnbox = (*queue).pop_front().unwrap();
-                        (*queue).push_front(Box::new(|| { /* placeholder */ }));
+                        (*queue).push_front(Box::new(|| {
+                            // placeholder
+                        }));
                         fnbox.call_box(());
                         let _discarded_placeholder = (*queue).pop_front();
                     }

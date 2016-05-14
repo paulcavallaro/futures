@@ -10,27 +10,26 @@ use libc::{nanosleep, timespec};
 fn cpu_relax() {
     // This instruction is meant for usage in spinlock loops
     // (see Intel x86 manual, III, 4.2)
-    unsafe { asm!("pause" :::: "volatile"); }
+    unsafe {
+        asm!("pause" :::: "volatile");
+    }
 }
 
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 #[inline(always)]
-fn cpu_relax() {
-}
+fn cpu_relax() {}
 
 /// A helper object for the contended case. Starts off with eager
 /// spinning, and falls back to sleeping for small quantums.
 struct Sleeper {
-    spin_count : u32,
+    spin_count: u32,
 }
 
-const MAX_ACTIVE_SPIN : u32 = 4000;
+const MAX_ACTIVE_SPIN: u32 = 4000;
 
 impl Sleeper {
     pub fn new() -> Sleeper {
-        Sleeper {
-            spin_count : 0,
-        }
+        Sleeper { spin_count: 0 }
     }
 
     pub fn wait(&mut self) {
@@ -38,14 +37,13 @@ impl Sleeper {
             self.spin_count += 1;
             cpu_relax();
         } else {
-            /*
-            * Always sleep 0.5ms, assuming this will make the kernel put
-            * us down for whatever its minimum timer resolution is (in
-            * linux this varies by kernel version from 1ms to 10ms).
-            */
+            // Always sleep 0.5ms, assuming this will make the kernel put
+            // us down for whatever its minimum timer resolution is (in
+            // linux this varies by kernel version from 1ms to 10ms).
+            //
             let sleep_time = timespec {
-                tv_sec : 0,
-                tv_nsec : 500000
+                tv_sec: 0,
+                tv_nsec: 500000,
             };
             unsafe {
                 nanosleep(&sleep_time, 0 as *mut timespec);
@@ -55,20 +53,17 @@ impl Sleeper {
 }
 
 pub struct MicroSpinLock {
-    lock : AtomicBool,
+    lock: AtomicBool,
 }
 
-const FREE : bool = false;
-const LOCKED : bool = true;
+const FREE: bool = false;
+const LOCKED: bool = true;
 
 /// A really, *really* small spinlock for fine-grained locking of lots
 /// of teeny-tiny data.
 impl MicroSpinLock {
-
     pub const fn new() -> MicroSpinLock {
-        MicroSpinLock {
-            lock : ATOMIC_BOOL_INIT
-        }
+        MicroSpinLock { lock: ATOMIC_BOOL_INIT }
     }
 
     /// Tries to acquire the spinlock.
@@ -98,9 +93,10 @@ impl MicroSpinLock {
 
     #[inline(always)]
     /// Returns true if updated, false if not
-    fn cas(&self, compare : bool, new_val : bool) -> bool {
-        self.lock.compare_exchange(compare, new_val,
-                                   Ordering::Acquire, Ordering::Relaxed).is_ok()
+    fn cas(&self, compare: bool, new_val: bool) -> bool {
+        self.lock
+            .compare_exchange(compare, new_val, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
     }
 }
 
@@ -108,9 +104,11 @@ unsafe impl Sync for MicroSpinLock {}
 
 /// Stolen from aturon's [crossbeam](https://github.com/aturon/crossbeam)
 /// Like `std::thread::spawn`, but without the closure bounds.
-pub unsafe fn spawn_unsafe<'a, F>(f: F) -> thread::JoinHandle<()> where F: FnOnce() + 'a {
+pub unsafe fn spawn_unsafe<'a, F>(f: F) -> thread::JoinHandle<()>
+    where F: FnOnce() + 'a
+{
     use std::mem;
-    use std::boxed::{FnBox};
+    use std::boxed::FnBox;
 
     let closure: Box<FnBox() + 'a> = Box::new(f);
     let closure: Box<FnBox() + Send> = mem::transmute(closure);
@@ -161,12 +159,12 @@ fn test_microspinlock_spin() {
 
 #[cfg(test)]
 mod tests {
-    use test::{Bencher};
+    use test::Bencher;
     use super::*;
-    use std::sync::{Mutex};
+    use std::sync::Mutex;
 
     #[bench]
-    fn bench_uncontended_microspinlock(b : &mut Bencher) {
+    fn bench_uncontended_microspinlock(b: &mut Bencher) {
         let spinlock = MicroSpinLock::new();
         b.iter(|| {
             spinlock.lock();
@@ -175,7 +173,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_uncontended_mutex(b : &mut Bencher) {
+    fn bench_uncontended_mutex(b: &mut Bencher) {
         let mutex = Mutex::new(0);
         b.iter(|| {
             let _raii = mutex.lock().unwrap();
