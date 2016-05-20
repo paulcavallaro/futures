@@ -3,9 +3,9 @@ use std::ptr;
 use detail::core::Core;
 use executor::InlineExecutor;
 
-struct Promise<T> {
-    core_ptr: *mut Core<T>,
-    retrieved: bool,
+pub struct Promise<T> {
+    pub core_ptr: *mut Core<T>,
+    pub retrieved: bool,
 }
 
 impl<T> Drop for Promise<T> {

@@ -3,6 +3,7 @@ use std::ptr;
 
 use detail::core::Core;
 use executor::{InlineExecutor, Executor};
+use promise::Promise;
 use try::Try;
 
 
@@ -56,6 +57,15 @@ impl<T> Future<T> {
         where F: FnOnce(Try<T>) -> Future<U>
     {
         self.panic_if_invalid();
+        let mut p = Promise::new();
+        unsafe {
+            (*p.core_ptr).set_interrupt_handler_nolock(self.core.get_interrupt_handler());
+        panic!("Not implemented")
+    }
+
+    pub fn thenVal<F, U>(&self, func : F) -> U
+        where F: FnOnce(Try<T>) -> U
+    {
         // TODO(ptc) implement the rest of then by creating promise then setting
         // the callback to fulfill the promise and returning the future for that
         // promise
