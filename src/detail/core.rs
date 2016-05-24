@@ -256,7 +256,7 @@ impl<T> Core<T> {
     }
 
     /// Call only from Promise thread
-    fn set_result(&self, res: Try<T>) {
+    pub fn set_result(&self, res: Try<T>) {
         let mut transition_to_armed = false;
         let res = UnsafeCell::new(Some(res));
         let mut set_result_ = || unsafe {
@@ -391,14 +391,14 @@ impl<T> Core<T> {
         self.interrupt_lock.unlock();
     }
 
-    fn set_interrupt_handler_nolock(&self, handler: Arc<Fn(&io::Error)>) {
+    pub fn set_interrupt_handler_nolock(&self, handler: Arc<Fn(&io::Error)>) {
         self.interrupt_handler_set.store(true, Ordering::Relaxed);
         unsafe {
             *self.interrupt_handler.get() = Some(handler);
         }
     }
 
-    fn get_interrupt_handler(&self) -> Option<Arc<Fn(&io::Error)>> {
+    pub fn get_interrupt_handler(&self) -> Option<Arc<Fn(&io::Error)>> {
         if !self.interrupt_handler_set.load(Ordering::Acquire) {
             return None;
         }

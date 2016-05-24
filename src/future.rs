@@ -3,6 +3,7 @@ use std::ptr;
 
 use detail::core::Core;
 use executor::{InlineExecutor, Executor};
+use promise::Promise;
 use try::Try;
 
 
@@ -17,6 +18,10 @@ impl<T> Drop for Future<T> {
 }
 
 impl<T> Future<T> {
+    pub fn new_core_ptr(core_ptr : *mut Core<T>) -> Future<T> {
+        Future { core_ptr: core_ptr }
+    }
+
     pub fn new(try: Try<T>) -> Future<T> {
         Future { core_ptr: Box::into_raw(Box::new(Core::new_try(try))) }
     }
@@ -52,10 +57,37 @@ impl<T> Future<T> {
         }
     }
 
-    pub fn then<F, U>(&self, func: F) -> Future<U>
-        where F: FnOnce(Try<T>) -> Future<U>
+    pub fn then<F, U>(&mut self, func: F) -> Future<U>
+        where F: FnOnce(Try<T>) -> Future<U> + 'static,
+              U: 'static
     {
         self.panic_if_invalid();
+        let mut p : Promise<U> = Promise::new();
+        unsafe {
+            if let Some(handler) = (*self.core_ptr).get_interrupt_handler() {
+                (*p.core_ptr).set_interrupt_handler_nolock(handler);
+            }
+        }
+        let f = p.get_future();
+        f.set_executor(self.get_executor());
+
+        self.set_callback(move |try| {
+            if try.has_error() {
+                p.set_error(try);
+            } else {
+                let mut f2 = func(try);
+                f2.set_callback(move |try2| {
+                    p.set_try(try2);
+                });
+            }
+        });
+        return f;
+    }
+
+    pub fn thenVal<F, U>(&self, func : F) -> U
+        where F: FnOnce(Try<T>) -> U,
+              U: 'static
+    {
         // TODO(ptc) implement the rest of then by creating promise then setting
         // the callback to fulfill the promise and returning the future for that
         // promise
@@ -91,5 +123,15 @@ mod tests {
         b.iter(|| {
             let future = Future::new(Try::new_value(0));
         })
+    }
+
+    #[test]
+    fn test_future_then() {
+        let mut future = Future::new(Try::new_value(0));
+        let res = future.then(|try| {
+            let v = try.value().unwrap();
+            return Future::new(Try::new_value(v + 1));
+        }).value().unwrap();
+        assert_eq!(res, 1);
     }
 }

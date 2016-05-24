@@ -2,10 +2,12 @@ use std::ptr;
 
 use detail::core::Core;
 use executor::InlineExecutor;
+use future::Future;
+use try::Try;
 
-struct Promise<T> {
-    core_ptr: *mut Core<T>,
-    retrieved: bool,
+pub struct Promise<T> {
+    pub core_ptr: *mut Core<T>,
+    pub retrieved: bool,
 }
 
 impl<T> Drop for Promise<T> {
@@ -32,5 +34,43 @@ impl<T> Promise<T> {
                 self.core_ptr = ptr::null_mut();
             }
         }
+    }
+
+    fn throw_if_retrieved(&self) {
+        // TODO(ptc) use UNLIKELY in future
+        if self.retrieved {
+            panic!("Been retrieved!")
+        }
+    }
+
+    fn throw_if_fulfilled(&self) {
+        // TODO(ptc) Use UNLIKELY for both tests
+        if self.core_ptr.is_null() {
+            panic!("No state")
+        }
+        if unsafe { (*self.core_ptr).ready() } {
+            panic!("Promise already satisfied")
+        }
+    }
+
+    pub fn set_try(&self, try : Try<T>) {
+        self.throw_if_fulfilled();
+        unsafe {
+            (*self.core_ptr).set_result(try)
+        }
+    }
+
+    pub fn set_error<U>(&self, try : Try<U>) {
+        self.throw_if_fulfilled();
+        unsafe {
+            (*self.core_ptr).set_result(Try::new_error(try.get_error()));
+        }
+    }
+
+    pub fn get_future(&mut self) -> Future<T> {
+        // TODO(ptc) Implement get_future
+        self.throw_if_retrieved();
+        self.retrieved = true;
+        return Future::new_core_ptr(self.core_ptr);
     }
 }
