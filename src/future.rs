@@ -68,7 +68,7 @@ impl<T> Future<T> {
                 (*p.core_ptr).set_interrupt_handler_nolock(handler);
             }
         }
-        let f = p.get_future();
+        let f = try!(p.get_future());
         f.set_executor(self.get_executor());
 
         self.set_callback(move |try| {

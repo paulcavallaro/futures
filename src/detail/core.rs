@@ -111,7 +111,8 @@ pub enum State {
 fn back_and_forth_state() {
     assert_eq!(FSM::new(State::Start).get_state(), State::Start);
     assert_eq!(FSM::new(State::OnlyResult).get_state(), State::OnlyResult);
-    assert_eq!(FSM::new(State::OnlyCallback).get_state(), State::OnlyCallback);
+    assert_eq!(FSM::new(State::OnlyCallback).get_state(),
+               State::OnlyCallback);
     assert_eq!(FSM::new(State::Armed).get_state(), State::Armed);
     assert_eq!(FSM::new(State::Done).get_state(), State::Done);
 }

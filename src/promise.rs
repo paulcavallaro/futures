@@ -37,7 +37,7 @@ impl<T> Promise<T> {
         }
     }
 
-    fn throw_if_retrieved(&self) -> Result<(), Error> {
+    fn error_if_retrieved(&self) -> Result<(), Error> {
         // TODO(ptc) use UNLIKELY in future
         if self.retrieved {
             return Err(Error::new(ErrorKind::Other, "Promise already retrieved"));
@@ -45,7 +45,7 @@ impl<T> Promise<T> {
         return Ok(());
     }
 
-    fn throw_if_fulfilled(&self) -> Result<(), Error> {
+    fn error_if_fulfilled(&self) -> Result<(), Error> {
         // TODO(ptc) Use UNLIKELY for both tests
         if self.core_ptr.is_null() {
             return Err(Error::new(ErrorKind::Other, "No state"));
@@ -57,21 +57,23 @@ impl<T> Promise<T> {
     }
 
     pub fn set_try(&self, try: Try<T>) -> Result<(), Error> {
-        try!(self.throw_if_fulfilled());
-        unsafe { (*self.core_ptr).set_result(try) }
-    }
-
-    pub fn set_error<U>(&self, try: Try<U>) {
-        self.throw_if_fulfilled();
+        try!(self.error_if_fulfilled());
         unsafe {
-            (*self.core_ptr).set_result(Try::new_error(try.get_error()));
+            return (*self.core_ptr).set_result(try);
         }
     }
 
-    pub fn get_future(&mut self) -> Future<T> {
+    pub fn set_error<U>(&self, try: Try<U>) -> Result<(), Error> {
+        try!(self.error_if_fulfilled());
+        unsafe {
+            return (*self.core_ptr).set_result(Try::new_error(try.get_error()));
+        }
+    }
+
+    pub fn get_future(&mut self) -> Result<Future<T>, Error> {
         // TODO(ptc) Implement get_future
-        self.throw_if_retrieved();
+        try!(self.error_if_retrieved());
         self.retrieved = true;
-        return Future::new_core_ptr(self.core_ptr);
+        return Ok(Future::new_core_ptr(self.core_ptr));
     }
 }
