@@ -84,14 +84,29 @@ impl<T> Future<T> {
         return Ok(f);
     }
 
-    pub fn thenVal<F, U>(&self, func: F) -> U
-        where F: FnOnce(Try<T>) -> U,
+    pub fn then_val<F, U>(&mut self, func: F) -> Result<Future<U>, Error>
+        where F: FnOnce(Try<T>) -> U + 'static,
               U: 'static
     {
-        // TODO(ptc) implement the rest of then by creating promise then setting
-        // the callback to fulfill the promise and returning the future for that
-        // promise
-        panic!("Not implemented")
+        try!(self.error_if_invalid());
+        let mut p: Promise<U> = Promise::new();
+        unsafe {
+            if let Some(handler) = (*self.core_ptr).get_interrupt_handler() {
+                (*p.core_ptr).set_interrupt_handler_nolock(handler);
+            }
+        }
+
+        let f = try!(p.get_future());
+        f.set_executor(self.get_executor());
+        self.set_callback(move |try| {
+            if try.has_error() {
+                p.set_error(try);
+            } else {
+                // TODO(ptc) see if this is right to just call this in-line
+                p.set_try(Try::new_value(func(try)));
+            }
+        });
+        return Ok(f);
     }
 
     pub fn value(&self) -> Result<T, Error> {
@@ -131,6 +146,19 @@ mod tests {
         let res = future.then(|try| {
                 let v = try.value().unwrap();
                 return Future::new(Try::new_value(v + 1));
+            })
+            .unwrap()
+            .value()
+            .unwrap();
+        assert_eq!(res, 1);
+    }
+
+    #[test]
+    fn test_future_then_val() {
+        let mut future = Future::new(Try::new_value(0));
+        let res = future.then_val(|try| {
+                let v = try.value().unwrap();
+                return v + 1;
             })
             .unwrap()
             .value()
