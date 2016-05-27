@@ -1,3 +1,4 @@
+use std::io::{Error, ErrorKind};
 use std::ptr;
 
 use detail::core::Core;
@@ -36,31 +37,31 @@ impl<T> Promise<T> {
         }
     }
 
-    fn throw_if_retrieved(&self) {
+    fn throw_if_retrieved(&self) -> Result<(), Error> {
         // TODO(ptc) use UNLIKELY in future
         if self.retrieved {
-            panic!("Been retrieved!")
+            return Err(Error::new(ErrorKind::Other, "Promise already retrieved"));
         }
+        return Ok(());
     }
 
-    fn throw_if_fulfilled(&self) {
+    fn throw_if_fulfilled(&self) -> Result<(), Error> {
         // TODO(ptc) Use UNLIKELY for both tests
         if self.core_ptr.is_null() {
-            panic!("No state")
+            return Err(Error::new(ErrorKind::Other, "No state"));
         }
         if unsafe { (*self.core_ptr).ready() } {
-            panic!("Promise already satisfied")
+            return Err(Error::new(ErrorKind::Other, "Promise already satisfied"));
         }
+        return Ok(());
     }
 
-    pub fn set_try(&self, try : Try<T>) {
-        self.throw_if_fulfilled();
-        unsafe {
-            (*self.core_ptr).set_result(try)
-        }
+    pub fn set_try(&self, try: Try<T>) -> Result<(), Error> {
+        try!(self.throw_if_fulfilled());
+        unsafe { (*self.core_ptr).set_result(try) }
     }
 
-    pub fn set_error<U>(&self, try : Try<U>) {
+    pub fn set_error<U>(&self, try: Try<U>) {
         self.throw_if_fulfilled();
         unsafe {
             (*self.core_ptr).set_result(Try::new_error(try.get_error()));

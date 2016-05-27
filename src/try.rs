@@ -43,13 +43,10 @@ impl<T> Try<T> {
     pub fn get_error(self) -> io::Error {
         match self.contains {
             Contains::VALUE(val) => {
-                io::Error::new(io::ErrorKind::Other,
-                               "Calling get_error on a succesful Try")
-            },
-            Contains::ERROR(err) => err,
-            Contains::NOTHING => {
-                io::Error::new(io::ErrorKind::Other, "Using Uninitialized Try")
+                io::Error::new(io::ErrorKind::Other, "Calling get_error on a succesful Try")
             }
+            Contains::ERROR(err) => err,
+            Contains::NOTHING => io::Error::new(io::ErrorKind::Other, "Using Uninitialized Try"),
         }
     }
 

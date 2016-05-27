@@ -1,6 +1,6 @@
 use std::boxed::{Box, FnBox};
 use std::cell::UnsafeCell;
-use std::io::ErrorKind;
+use std::io::{Error, ErrorKind};
 use std::io;
 use std::mem;
 use std::ptr;
@@ -134,8 +134,8 @@ pub struct Core<T> {
     priority: i8,
     executor: *const Executor,
     context: Arc<RequestContext>,
-    interrupt: UnsafeCell<Option<io::Error>>,
-    interrupt_handler: UnsafeCell<Option<Arc<Fn(&io::Error)>>>,
+    interrupt: UnsafeCell<Option<Error>>,
+    interrupt_handler: UnsafeCell<Option<Arc<Fn(&Error)>>>,
 }
 
 struct NullExecutor(usize, usize);
@@ -206,14 +206,14 @@ impl<T> Core<T> {
         unsafe {
             // TODO(ptc) use UNLIKELY here
             if (*self.result.get()).is_none() {
-                self.set_result(Try::new_error(io::Error::new(ErrorKind::Other, "Broken Promise")));
+                self.set_result(Try::new_error(Error::new(ErrorKind::Other, "Broken Promise")));
             }
         }
         self.detach_one();
     }
 
     /// Call only from Future thread
-    pub fn set_callback<F>(&self, func: F)
+    pub fn set_callback<F>(&self, func: F) -> Result<(), Error>
         where F: FnOnce(Try<T>) + 'static
     {
         let mut transition_to_armed = false;
@@ -239,13 +239,16 @@ impl<T> Core<T> {
                     transition_to_armed = true;
                 }
                 State::OnlyCallback => {
-                    panic!("logic error: set_callback called twice");
+                    return Err(Error::new(ErrorKind::Other,
+                                          "logic error: set_callback called twice"));
                 }
                 State::Armed => {
-                    panic!("logic error: set_callback called twice");
+                    return Err(Error::new(ErrorKind::Other,
+                                          "logic error: set_callback called twice"));
                 }
                 State::Done => {
-                    panic!("logic error: set_callback called twice");
+                    return Err(Error::new(ErrorKind::Other,
+                                          "logic error: set_callback called twice"));
                 }
             }
         }
@@ -253,10 +256,11 @@ impl<T> Core<T> {
         if transition_to_armed {
             self.maybe_callback();
         }
+        return Ok(());
     }
 
     /// Call only from Promise thread
-    pub fn set_result(&self, res: Try<T>) {
+    pub fn set_result(&self, res: Try<T>) -> Result<(), Error> {
         let mut transition_to_armed = false;
         let res = UnsafeCell::new(Some(res));
         let mut set_result_ = || unsafe {
@@ -276,19 +280,23 @@ impl<T> Core<T> {
                     transition_to_armed = true;
                 }
                 State::OnlyResult => {
-                    panic!("logic error: set_result called twice");
+                    return Err(Error::new(ErrorKind::Other,
+                                          "logic error: set_result called twice"));
                 }
                 State::Armed => {
-                    panic!("logic error: set_result called twice");
+                    return Err(Error::new(ErrorKind::Other,
+                                          "logic error: set_result called twice"));
                 }
                 State::Done => {
-                    panic!("logic error: set_result called twice");
+                    return Err(Error::new(ErrorKind::Other,
+                                          "logic error: set_result called twice"));
                 }
             }
         }
         if transition_to_armed {
             self.maybe_callback();
         }
+        return Ok(());
     }
 
     pub fn set_executor(&mut self, exec: *const Executor, priority: i8) {
@@ -354,7 +362,7 @@ impl<T> Core<T> {
         }
     }
 
-    fn raise(&self, err: io::Error) {
+    fn raise(&self, err: Error) {
         if !self.interrupt_lock.try_lock() {
             self.interrupt_lock.lock();
         }
@@ -374,7 +382,7 @@ impl<T> Core<T> {
     /// Should only be called from Promise thread
     /// Sets the interrupt handler on the Core object, if it already has
     /// an exception/interrupt than just cann the handler on the interrupt
-    fn set_interrupt_handler(&self, handler: Arc<Fn(&io::Error)>) {
+    fn set_interrupt_handler(&self, handler: Arc<Fn(&Error)>) {
         if !self.interrupt_lock.try_lock() {
             self.interrupt_lock.lock();
         }
@@ -391,14 +399,14 @@ impl<T> Core<T> {
         self.interrupt_lock.unlock();
     }
 
-    pub fn set_interrupt_handler_nolock(&self, handler: Arc<Fn(&io::Error)>) {
+    pub fn set_interrupt_handler_nolock(&self, handler: Arc<Fn(&Error)>) {
         self.interrupt_handler_set.store(true, Ordering::Relaxed);
         unsafe {
             *self.interrupt_handler.get() = Some(handler);
         }
     }
 
-    pub fn get_interrupt_handler(&self) -> Option<Arc<Fn(&io::Error)>> {
+    pub fn get_interrupt_handler(&self) -> Option<Arc<Fn(&Error)>> {
         if !self.interrupt_handler_set.load(Ordering::Acquire) {
             return None;
         }
@@ -417,13 +425,13 @@ impl<T> Core<T> {
         return self.has_result();
     }
 
-    pub fn get_try(&self) -> Try<T> {
+    pub fn get_try(&self) -> Result<Try<T>, Error> {
         if self.ready() {
             unsafe {
-                return (*self.result.get()).take().unwrap();
+                return Ok((*self.result.get()).take().unwrap());
             }
         } else {
-            panic!("Future not ready")
+            return Err(Error::new(ErrorKind::Other, "Future not ready"));
         }
     }
 
@@ -567,13 +575,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "logic error: set_result called twice")]
     fn set_result_twice() {
         let core: Core<usize> = Core::new();
         let mut try = Try::new_value(1);
         core.set_result(try);
         try = Try::new_value(2);
-        core.set_result(try);
+        assert!(core.set_result(try).is_err());
     }
 
     #[test]
@@ -584,11 +591,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "logic error: set_callback called twice")]
     fn set_callback_twice() {
         let core: Core<usize> = Core::new();
         core.set_callback(|_| {});
-        core.set_callback(|_| {});
+        assert!(core.set_callback(|_| {}).is_err());
     }
 
     #[test]

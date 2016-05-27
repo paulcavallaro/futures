@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{Error, ErrorKind};
 use std::ptr;
 
 use detail::core::Core;
@@ -18,7 +18,7 @@ impl<T> Drop for Future<T> {
 }
 
 impl<T> Future<T> {
-    pub fn new_core_ptr(core_ptr : *mut Core<T>) -> Future<T> {
+    pub fn new_core_ptr(core_ptr: *mut Core<T>) -> Future<T> {
         Future { core_ptr: core_ptr }
     }
 
@@ -41,28 +41,28 @@ impl<T> Future<T> {
         unsafe { (*self.core_ptr).set_executor(x, -1) }
     }
 
-    fn panic_if_invalid(&self) {
-        // TODO(ptc) Change this to just return an Error
+    fn error_if_invalid(&self) -> Result<(), Error> {
         if self.core_ptr.is_null() {
-            panic!("No State")
+            return Err(Error::new(ErrorKind::Other, "No state"));
         }
+        return Ok(());
     }
 
-    fn set_callback<F>(&mut self, func: F)
+    fn set_callback<F>(&mut self, func: F) -> Result<(), Error>
         where F: FnOnce(Try<T>) + 'static
     {
-        self.panic_if_invalid();
+        try!(self.error_if_invalid());
         unsafe {
-            (*self.core_ptr).set_callback(func);
+            return (*self.core_ptr).set_callback(func);
         }
     }
 
-    pub fn then<F, U>(&mut self, func: F) -> Future<U>
+    pub fn then<F, U>(&mut self, func: F) -> Result<Future<U>, Error>
         where F: FnOnce(Try<T>) -> Future<U> + 'static,
               U: 'static
     {
-        self.panic_if_invalid();
-        let mut p : Promise<U> = Promise::new();
+        try!(self.error_if_invalid());
+        let mut p: Promise<U> = Promise::new();
         unsafe {
             if let Some(handler) = (*self.core_ptr).get_interrupt_handler() {
                 (*p.core_ptr).set_interrupt_handler_nolock(handler);
@@ -81,10 +81,10 @@ impl<T> Future<T> {
                 });
             }
         });
-        return f;
+        return Ok(f);
     }
 
-    pub fn thenVal<F, U>(&self, func : F) -> U
+    pub fn thenVal<F, U>(&self, func: F) -> U
         where F: FnOnce(Try<T>) -> U,
               U: 'static
     {
@@ -94,10 +94,10 @@ impl<T> Future<T> {
         panic!("Not implemented")
     }
 
-    pub fn value(&self) -> Result<T, io::Error> {
-        self.panic_if_invalid();
+    pub fn value(&self) -> Result<T, Error> {
+        try!(self.error_if_invalid());
         unsafe {
-            return (*self.core_ptr).get_try().value();
+            return try!((*self.core_ptr).get_try()).value();
         }
     }
 }
@@ -129,9 +129,12 @@ mod tests {
     fn test_future_then() {
         let mut future = Future::new(Try::new_value(0));
         let res = future.then(|try| {
-            let v = try.value().unwrap();
-            return Future::new(Try::new_value(v + 1));
-        }).value().unwrap();
+                let v = try.value().unwrap();
+                return Future::new(Try::new_value(v + 1));
+            })
+            .unwrap()
+            .value()
+            .unwrap();
         assert_eq!(res, 1);
     }
 }
