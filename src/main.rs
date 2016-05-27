@@ -21,7 +21,7 @@ fn main() {
     spinlock.lock();
     let child = unsafe {
         spawn_unsafe(|| {
-            // Sleep 2 seconds then release lock
+            // Sleep then release lock
             assert!(!spinlock.try_lock());
             thread::sleep(time::Duration::new(1, 0));
             spinlock.unlock();
