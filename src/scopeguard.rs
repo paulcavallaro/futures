@@ -32,10 +32,10 @@ impl<'a, F> Drop for ScopeGuard<'a, F>
 #[macro_export]
 macro_rules! scope_exit {
     ($e:expr) => {
-        let gensym = ScopeGuard::new(|| { $e })
+        let _gensym = ScopeGuard::new(|| { $e })
     };
     ($b:block) => {
-        let gensym = ScopeGuard::new(|| { $b })
+        let _gensym = ScopeGuard::new(|| { $b })
     };
 }
 

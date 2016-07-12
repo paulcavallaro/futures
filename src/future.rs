@@ -2,7 +2,7 @@ use std::io::{Error, ErrorKind};
 use std::ptr;
 
 use detail::core::Core;
-use executor::{InlineExecutor, Executor};
+use executor::{Executor};
 use promise::Promise;
 use try::Try;
 
@@ -13,7 +13,7 @@ pub struct Future<T> {
 
 impl<T> Drop for Future<T> {
     fn drop(&mut self) {
-        unsafe { self.detach() }
+        self.detach();
     }
 }
 

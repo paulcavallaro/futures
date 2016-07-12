@@ -42,7 +42,7 @@ impl<T> Try<T> {
 
     pub fn get_error(self) -> io::Error {
         match self.contains {
-            Contains::VALUE(val) => {
+            Contains::VALUE(_) => {
                 io::Error::new(io::ErrorKind::Other, "Calling get_error on a succesful Try")
             }
             Contains::ERROR(err) => err,

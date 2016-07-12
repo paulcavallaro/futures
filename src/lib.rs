@@ -1,6 +1,5 @@
 #![feature(asm)]
 #![feature(const_fn)]
-#![feature(extended_compare_and_swap)]
 #![feature(fnbox)]
 #![feature(repr_simd)]
 #![feature(test)]

@@ -1,17 +1,15 @@
 use std::boxed::{Box, FnBox};
 use std::cell::UnsafeCell;
 use std::io::{Error, ErrorKind};
-use std::io;
 use std::mem;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize,Ordering};
 use std::sync::Arc;
 
-use executor::{InlineExecutor, Executor};
+use executor::{Executor};
 use microspinlock::MicroSpinLock;
 use scopeguard::ScopeGuard;
 use try::Try;
-use future::Future;
 
 /// Assume a cache line is 64 bytes
 #[repr(simd)]
@@ -127,7 +125,7 @@ pub struct Core<T> {
     result: UnsafeCell<Option<Try<T>>>,
     state: FSM,
     /// TODO(ptc) Shouldn't need an entire u64 to store the number of attached
-    attached: AtomicUsize,
+    attached: AtomicIsize,
     active: AtomicBool,
     interrupt_handler_set: AtomicBool,
     interrupt_lock: MicroSpinLock,
@@ -151,7 +149,7 @@ impl<T> Core<T> {
             callback: UnsafeCell::new(Box::new(|_| {})),
             result: UnsafeCell::new(None),
             state: FSM::new(State::Start),
-            attached: AtomicUsize::new(2),
+            attached: AtomicIsize::new(2),
             active: AtomicBool::new(true),
             interrupt_handler_set: AtomicBool::new(false),
             interrupt_lock: MicroSpinLock::new(),
@@ -170,7 +168,7 @@ impl<T> Core<T> {
             callback: UnsafeCell::new(Box::new(|_| {})),
             result: UnsafeCell::new(Some(try)),
             state: FSM::new(State::OnlyResult),
-            attached: AtomicUsize::new(1),
+            attached: AtomicIsize::new(1),
             active: AtomicBool::new(true),
             interrupt_handler_set: AtomicBool::new(false),
             interrupt_lock: MicroSpinLock::new(),
@@ -462,7 +460,7 @@ impl<T> Core<T> {
             self.executor_lock.lock();
         }
         let executor = self.executor;
-        let priority = self.priority;
+        let _priority = self.priority;
         self.executor_lock.unlock();
 
         // Keep Core alive until callback is run
@@ -509,7 +507,7 @@ impl RequestContext {
         RequestContext
     }
 
-    pub fn set_context(ctxt: Arc<RequestContext>) {
+    pub fn set_context(_ctxt: Arc<RequestContext>) {
         // TODO(ptc) implement
     }
 
